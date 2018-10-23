@@ -3,6 +3,7 @@ version := "1.0"
 scalaVersion := "2.11.8"
 scalacOptions ++= Seq("-optimise", "-feature", "-deprecation", "-Xlint:_", "-JXss5M")
 
+resolvers += "Repo at github.com/ankurdave/maven-repo" at "https://github.com/ankurdave/maven-repo/raw/master"
 resolvers += "Spark Packages Repo" at "http://dl.bintray.com/spark-packages/maven"
 
 libraryDependencies ++= Seq(
