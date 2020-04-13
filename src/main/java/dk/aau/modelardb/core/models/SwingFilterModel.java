@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,95 +14,122 @@
  */
 package dk.aau.modelardb.core.models;
 
-import java.nio.ByteBuffer;
-import java.util.List;
-
 import dk.aau.modelardb.core.DataPoint;
 import dk.aau.modelardb.core.utility.LinearFunction;
+import dk.aau.modelardb.core.utility.Static;
+
+import java.nio.ByteBuffer;
+import java.util.List;
 
 class SwingFilterModel extends Model {
 
     /** Constructors **/
-    SwingFilterModel(float error, int limit) {
-        super(SwingFilterSegment.class, error, limit);
+    SwingFilterModel(int mid, float error, int limit) {
+        super(mid, error, limit);
         this.withinErrorBound = true;
     }
 
     /** Public Methods **/
     @Override
-    public boolean append(DataPoint currentDataPoint) {
+    public boolean append(DataPoint[] currentDataPoints) {
         if ( ! this.withinErrorBound) {
             return false;
         }
 
-        //Calculates the absolute allowed deviation before the error bound is broken. While in theory the deviation
-        // should be a calculated as the currentDataPoint.value * (this.error / 100.0)), however, due to the calculation
-        // not being completely accurate, 100.0 would allow data points above the error at the 5 or above decimal.
-        double deviation = Math.abs(currentDataPoint.value * (this.error / 100.1));
+        //Allows size to be be updated after adding the second data point without the need of branches
+        int currentSize = this.currentSize;
+        int nextSize = this.currentSize + 1;
 
         if (this.currentSize == 0) {
+            //An average data point must be constructed so all data points in the group are within the error bound
+            float min = Static.min(currentDataPoints);
+            float max = Static.max(currentDataPoints);
+            float avg = Static.avg(currentDataPoints);
+            if (outsidePercentageErrorBound(avg, min) || outsidePercentageErrorBound(avg, max)) {
+                this.withinErrorBound = false;
+                return false;
+            }
+
             // Line 1 - 2
-            this.initialDataPoint = currentDataPoint;
-            this.currentSize += 1;
-            return true;
-        } else if (this.currentSize == 1) {
-            // Line 3
-            this.upperBound = new LinearFunction(
-                    initialDataPoint.timestamp, initialDataPoint.value,
-                    currentDataPoint.timestamp, currentDataPoint.value + deviation);
-            this.lowerBound = new LinearFunction(
-                    initialDataPoint.timestamp, initialDataPoint.value,
-                    currentDataPoint.timestamp, currentDataPoint.value - deviation);
-            this.currentSize += 1;
-            return true;
-        }
-
-        //Line 6
-        double uba = upperBound.get(currentDataPoint.timestamp);
-        double lba = lowerBound.get(currentDataPoint.timestamp);
-
-        if (uba + deviation < currentDataPoint.value || lba - deviation > currentDataPoint.value) {
-            this.withinErrorBound = false;
-            return false;
+            this.initialDataPoint = new DataPoint(currentDataPoints[0].sid, currentDataPoints[0].timestamp, avg);
         } else {
-            //Line 16
-            if (uba - deviation > currentDataPoint.value) {
-                this.upperBound = new LinearFunction(
-                        initialDataPoint.timestamp, initialDataPoint.value,
-                        currentDataPoint.timestamp, currentDataPoint.value + deviation);
+            //Expect for the first set of data point all data points can appended one at a time
+            for (DataPoint currentDataPoint : currentDataPoints) {
+                //Calculates the absolute allowed deviation before the error bound is exceeded. In theory the deviation
+                // should be a calculated as the currentDataPoint.value * (this.error / 100.0)). However, due to the
+                // calculation not being completely accurate, 100.0 would allow data points slightly above the error.
+                double deviation = Math.abs(currentDataPoint.value * (this.error / 100.1));
+
+                if (this.currentSize == 1) {
+                    // Line 3
+                    this.upperBound = new LinearFunction(
+                            initialDataPoint.timestamp, initialDataPoint.value,
+                            currentDataPoint.timestamp, currentDataPoint.value + deviation);
+                    this.lowerBound = new LinearFunction(
+                            initialDataPoint.timestamp, initialDataPoint.value,
+                            currentDataPoint.timestamp, currentDataPoint.value - deviation);
+                    this.currentSize = nextSize;
+                } else {
+                    //Line 6
+                    double uba = upperBound.get(currentDataPoint.timestamp);
+                    double lba = lowerBound.get(currentDataPoint.timestamp);
+
+                    if (uba + deviation < currentDataPoint.value || lba - deviation > currentDataPoint.value) {
+                        this.withinErrorBound = false;
+                        this.currentSize = currentSize;
+                        return false;
+                    } else {
+                        //Line 16
+                        if (uba - deviation > currentDataPoint.value) {
+                            this.upperBound = new LinearFunction(
+                                    initialDataPoint.timestamp, initialDataPoint.value,
+                                    currentDataPoint.timestamp, currentDataPoint.value + deviation);
+                        }
+                        //Line 15
+                        if (lba + deviation < currentDataPoint.value) {
+                            this.lowerBound = new LinearFunction(
+                                    initialDataPoint.timestamp, initialDataPoint.value,
+                                    currentDataPoint.timestamp, currentDataPoint.value - deviation);
+                        }
+                    }
+                }
             }
-            //Line 15
-            if (lba + deviation < currentDataPoint.value) {
-                this.lowerBound = new LinearFunction(
-                        initialDataPoint.timestamp, initialDataPoint.value,
-                        currentDataPoint.timestamp, currentDataPoint.value - deviation);
-            }
-            this.currentSize += 1;
-            return true;
         }
+        this.currentSize = nextSize;
+        return true;
     }
 
     @Override
-    public void initialize(List<DataPoint> currentSegment) {
+    public void initialize(List<DataPoint[]> currentSegment) {
         this.currentSize = 0;
         this.withinErrorBound = true;
 
-        for (DataPoint DataPoint : currentSegment) {
-            if (!append(DataPoint)) {
+        for (DataPoint[] dataPoints : currentSegment) {
+            if ( ! append(dataPoints)) {
                 return;
             }
         }
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, List<DataPoint> currentSegment, long[] gaps) {
-        //NOTE: As we do not need to minimize the average error we forgo calculating the line as specified in the paper
-        return new SwingFilterSegment(sid, startTime, endTime, resolution, this.upperBound.a, this.upperBound.b, gaps);
+    public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+        //All lines within the two bounds are valid but always selecting one of the bounds add unnecessary error to sums
+        double a = (this.lowerBound.a + this.upperBound.a) / 2.0;
+        double b = (this.lowerBound.b + this.upperBound.b) / 2.0;
+
+        if ((double) (float) a == a && (double) (float) b == b) {
+            return ByteBuffer.allocate(8).putFloat((float) a).putFloat((float) b).array();
+        } else if ((double) (float) a == a) {
+            return ByteBuffer.allocate(12).putFloat((float) a).putDouble(b).array();
+        } else {
+            return ByteBuffer.allocate(16).putDouble(a).putDouble(b).array();
+        }
     }
 
+
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps) {
-        return new SwingFilterSegment(sid, startTime, endTime, resolution, parameters, gaps);
+    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+        return new SwingFilterSegment(sid, startTime, endTime, resolution, parameters, offsets);
     }
 
     @Override
@@ -111,16 +138,29 @@ class SwingFilterModel extends Model {
     }
 
     @Override
-    public float size() {
-        //A linear function cannot be computed without two data points so we return NaN
+    public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+        //A linear function cannot be computed without at least two data points so we return NaN
         if (this.currentSize < 2) {
             return Float.NaN;
         }
 
-        //The parameters might either be encoded as two floats, two doubles or a float and a double
-        double a = this.upperBound.a;
-        double b = this.upperBound.b;
+        //All lines within the two bounds are valid but always selecting one of the bounds add unnecessary error to sums
+        double a = (this.lowerBound.a + this.upperBound.a) / 2.0;
+        double b = (this.lowerBound.b + this.upperBound.b) / 2.0;
 
+        //Verifies that the model has the necessary precession to be utilized, while the function computed in theory
+        // should not exceed the error bound it can do so (especially with 0% error) due to floating-point imprecision
+        for (int i = 0; startTime < endTime + resolution; i++, startTime += resolution) {
+            DataPoint[] dpa = dps.get(i);
+            float approximation = (float) (a * dpa[0].timestamp + b);
+            for (DataPoint dp : dpa) {
+                if (outsidePercentageErrorBound(approximation, dp.value)) {
+                    return Float.NaN;
+                }
+            }
+        }
+
+        //Determines if we need to use doubles or if floats are enough for the parameters
         if ((double) (float) a == a && (double) (float) b == b) {
             return 8.0F;
         } else if ((double) (float) a == a) {
@@ -130,7 +170,7 @@ class SwingFilterModel extends Model {
         }
     }
 
-    /** Instance Variable **/
+    /** Instance Variables **/
     private int currentSize;
     private LinearFunction upperBound;
     private LinearFunction lowerBound;
@@ -141,17 +181,11 @@ class SwingFilterModel extends Model {
 class SwingFilterSegment extends Segment {
 
     /** Constructors **/
-    SwingFilterSegment(int sid, long startTime, long endTime, int resolution, double a, double b, long[] gaps) {
-        super(sid, startTime, endTime, resolution, gaps);
-        this.a = a;
-        this.b = b;
-    }
-
-    SwingFilterSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps) {
-        super(sid, startTime, endTime, resolution, gaps);
+    SwingFilterSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+        super(sid, startTime, endTime, resolution, offsets);
         ByteBuffer arguments = ByteBuffer.wrap(parameters);
 
-        //Depending on the data being encoded the linear function might have required double precision decimals
+        //Depending on the data being encoded the linear function might have required double precision floating-point
         if (parameters.length == 16) {
             this.a = arguments.getDouble();
             this.b = arguments.getDouble();
@@ -166,24 +200,13 @@ class SwingFilterSegment extends Segment {
 
     /** Public Methods **/
     @Override
-    public byte[] parameters() {
-        if ((double) (float) a == a && (double) (float) b == b) {
-            return ByteBuffer.allocate(8).putFloat((float) this.a).putFloat((float) this.b).array();
-        } else if ((double) (float) a == a) {
-            return ByteBuffer.allocate(12).putFloat((float) this.a).putDouble(this.b).array();
-        } else {
-            return ByteBuffer.allocate(16).putDouble(this.a).putDouble(this.b).array();
-        }
-    }
-
-    @Override
     public float min() {
         if (this.a == 0) {
             return (float) this.b;
         } else if (this.a > 0) {
-            return this.get(this.startTime, 0);
+            return this.get(this.getStartTime(), 0);
         } else {
-            return this.get(this.endTime, 0);
+            return this.get(this.getEndTime(), 0);
         }
     }
 
@@ -192,16 +215,16 @@ class SwingFilterSegment extends Segment {
         if (this.a == 0) {
             return (float) this.b;
         } else if (this.a < 0) {
-            return this.get(this.startTime, 0);
+            return this.get(this.getStartTime(), 0);
         } else {
-            return this.get(this.endTime, 0);
+            return this.get(this.getEndTime(), 0);
         }
     }
 
     @Override
     public double sum() {
-        double first = this.a * this.startTime + this.b;
-        double last = this.a * this.endTime + this.b;
+        double first = this.a * this.getStartTime() + this.b;
+        double last = this.a * this.getEndTime() + this.b;
         double average = (first + last) / 2;
         return average * this.length();
     }
@@ -212,7 +235,7 @@ class SwingFilterSegment extends Segment {
         return (float) (this.a * timestamp + this.b);
     }
 
-    /** Instance Variable **/
+    /** Instance Variables **/
     private final double a;
     private final double b;
 }

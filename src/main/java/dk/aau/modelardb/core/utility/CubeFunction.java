@@ -14,19 +14,10 @@
  */
 package dk.aau.modelardb.core.utility;
 
-public class LinearFunction {
+import dk.aau.modelardb.core.models.Segment;
 
-    /** Constructors **/
-    public LinearFunction(long ts, double vs, long te, double ve) {
-        this.a = (ve - vs) / (te - ts);
-        this.b = vs - a * ts;
-    }
+import java.io.Serializable;
 
-    /** Public Methods **/
-    public double get(long ts) {
-        return this.a * ts + this.b;
-    }
-
-    /** Instance Variables **/
-    public final double a, b;
+public interface CubeFunction extends Serializable {
+    void aggregate(Segment segment, int sid, int field, double[] result);
 }

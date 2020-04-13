@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,9 @@ package dk.aau.modelardb
 
 import java.nio.file.{Files, Paths}
 
+import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer}
+import dk.aau.modelardb.core.utility.Static
+
 import scala.io.Source
 
 object Interface {
@@ -26,9 +29,8 @@ object Interface {
     interface match {
       case "none" =>
       case "socket" => socket()
+      case "http" => http()
       case path if Files.exists(Paths.get(path)) => file(path)
-      //NOTE: The version below below of file below exist exclusively to benchmark ingestion with automated queries
-      //case path if Files.exists(Paths.get(path)) => benchFile(path)
       case _ => throw new java.lang.UnsupportedOperationException("unknown value for modelardb.interface in the config file")
     }
   }
@@ -36,21 +38,23 @@ object Interface {
   /** Private Methods **/
   private def socket(): Unit = {
     //Setup
-    println("ModelarDB: socketSQL is ready for connection (Port: 9999)")
+    Static.info("ModelarDB: preparing socket end-point (Port: 9999)")
     val serverSocket = new java.net.ServerSocket(9999)
     val clientSocket = serverSocket.accept()
     val in = new java.io.BufferedReader(new java.io.InputStreamReader(clientSocket.getInputStream))
     val out = new java.io.PrintWriter(clientSocket.getOutputStream, true)
 
     //Query
-    println("ModelarDB: client socket is ready for query")
+    Static.info("ModelarDB: the socket is ready to receive queries (Port: 9999)")
     while (true) {
-      val query = in.readLine()
-      if (query.isEmpty) {
+      val query = in.readLine().trim
+      if (query == ":quit") {
+        Static.info("ModelarDB: received termination command, shutdown imminent")
         return
+      } else if ( ! query.isEmpty) {
+        execute(query, out.write)
+        out.flush()
       }
-      execute(query, out.write)
-      out.flush()
     }
 
     //Cleanup
@@ -60,67 +64,70 @@ object Interface {
     serverSocket.close()
   }
 
+  private def http(): Unit = {
+    //Setup
+    Static.info("ModelarDB: preparing HTTP end-point (Port: 9999)")
+    val server = HttpServer.create(new java.net.InetSocketAddress(9999), 0)
+
+    //Query
+    class QueryHandler extends HttpHandler {
+      override def handle(httpExchange: HttpExchange): Unit = {
+        val request = httpExchange.getRequestBody
+        val reader = new java.io.BufferedReader(new java.io.InputStreamReader(request))
+
+        //The query is executed with the result returned as an HTTP response
+        val results = scala.collection.mutable.ArrayBuffer[String]()
+        execute(reader.readLine.trim, line => results.append(line))
+        val out = results.mkString("\n")
+        httpExchange.sendResponseHeaders(200, out.length)
+        val response = httpExchange.getResponseBody
+        response.write(out.getBytes)
+        response.close()
+      }
+    }
+
+    //Starts a HTTP server that executes QueryHandler for each incoming request on /
+    server.createContext("/", new QueryHandler())
+    server.start()
+    Static.info("ModelarDB: the HTTP server is ready to receive queries (Port: 9999)")
+    scala.io.StdIn.readLine() //Prevents the method from returning to keep the server running
+
+    //Cleanup
+    server.stop(0)
+  }
+
   private def file(path: String): Unit = {
     //This method is only called if the file exist
     val st = System.currentTimeMillis()
-    println("ModelarDB: executing queries from " + path)
+    Static.info("ModelarDB: executing queries from " + path)
     val lines = Source.fromFile(path).getLines()
 
     for (line: String <- lines) {
       val q = line.trim
       if ( ! (q.isEmpty || q.startsWith("--"))) {
-        execute(q.stripMargin.toString, print)
+        execute(q.stripMargin, print)
       }
     }
     val et = System.currentTimeMillis() - st
     val jst = java.time.Duration.ofMillis(et)
-    println("ModelarDB: finished all queries after " + jst)
-  }
-
-  private def benchFile(path: String): Unit = {
-    val rand = scala.util.Random
-    val maxSid = 2500
-
-    //Ingest all queries into a list
-    val queries = new java.util.ArrayList[String]()
-    val lines = Source.fromFile(path).getLines()
-    for (line: String <- lines) {
-      val q = line.trim
-      if ( ! (q.isEmpty || q.startsWith("--"))) {
-        queries.add(q.stripMargin.toString)
-      }
-    }
-    val queriesCount = queries.size()
-
-    //This method is only called if the file exist
-    val st = System.currentTimeMillis()
-    println("ModelarDB: continuously executing queries from " + path)
-    while(true) {
-      val ri = rand.nextInt(queriesCount)
-      val sid = rand.nextInt(maxSid)
-      val query = queries.get(ri)
-      execute(query.replace("{}", sid.toString), print)
-    }
-
-    val et = System.currentTimeMillis() - st
-    val jst = java.time.Duration.ofMillis(et)
-    println("ModelarDB: ingestion finished after: " + jst)
+    Static.info("ModelarDB: finished all queries after " + jst)
   }
 
   private def execute(query: String, out: String => Unit): Unit = {
-    //Time and process query
     val st = System.currentTimeMillis()
     var result: Array[String] = null
     try {
-      result = this.sql(query)
+      val query_rewritten = query.replace("#", "sid, st, et, res, mid, param, gaps")
+      result = this.sql(query_rewritten)
     } catch {
       case e: Exception =>
+        e.printStackTrace()
         result = Array(e.toString)
     }
     val et = System.currentTimeMillis() - st
     val jst = java.time.Duration.ofMillis(et)
 
-    //Outputs the result using what ever method is passed as the arguments out
+    //Outputs the query result using the method provided as the arguments out
     out(s"""{\n  "time": "$jst",\n  "query": "$query",\n  "result":  [\n    """)
     if (result.nonEmpty) {
       var index = 0

@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,23 +17,21 @@ package dk.aau.modelardb
 import java.io.File
 import java.nio.file.{FileSystems, Paths}
 
-import dk.aau.modelardb.core.{Storage, TimeSeries, WorkingSet}
+import dk.aau.modelardb.core._
 import dk.aau.modelardb.core.utility.Static
-
-import scala.collection.JavaConverters._
-import scala.collection.immutable.HashMap
-import scala.collection.mutable.ArrayBuffer
-import scala.io.Source
-
 import dk.aau.modelardb.engines.EngineFactory
 import dk.aau.modelardb.storage.StorageFactory
+
+import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
 
 object Main {
 
   /** Public Methods **/
   def main(args: Array[String]): Unit = {
 
-    //ModelarDB checks args[0] for a config and use $HOME/Programs/modelardb.conf as a fallback
+    //ModelarDB checks args[0] for a config and uses $HOME/Programs/modelardb.conf as a fallback
     val fallback = System.getProperty("user.home") + "/Programs/modelardb.conf"
     val configPath: String = if (args.length == 1) {
       args(0)
@@ -42,155 +40,198 @@ object Main {
     } else {
       println("usage: modelardb path/to/modelardb.conf")
       System.exit(-1)
-      //HACK: Required to satisfied that the type of all branches in the match
+      //HACK: required to have the same type in all branches of the match expression
       ""
     }
 
-    /* Settings */
-    this.settings = readConfigFile(configPath)
-
-    this.error = settings("modelardb.error").head.toFloat
-    if (this.error < 0.0 || 100.0 < this.error) {
-      throw new UnsupportedOperationException("modelardb.error is a percentage written from 0.0 to 100.0")
-    }
-
-    this.latency = settings("modelardb.latency").head.toInt
-    if (this.latency < 0) {
-      throw new UnsupportedOperationException("modelardb.latency must be a positive number of seconds or zero to disable")
-    }
-
-    this.limit = settings("modelardb.limit").head.toInt
-    if (this.limit < 0) {
-      throw new UnsupportedOperationException("modelardb.limit must be a positive number of seconds or zero to disable")
-    }
-
-    //Java in general works with timestamps in millisecond so we convert the resolution
-    this.resolution = (settings("modelardb.resolution").head.toDouble * 1000).toInt
-    if (this.resolution <= 0) {
-      throw new UnsupportedOperationException("modelardb.resolution must be a positive number of seconds")
-    }
-
-    val batchSize = settings("modelardb.batch").head.toInt
-    if (batchSize <= 0) {
-      throw new java.lang.UnsupportedOperationException("modelardb.batch must be a positive number of segments not-yet flushed to storage")
-    }
-
-    /* Models */
-    this.models = settings("modelardb.models").toArray
-
-    /* Storage */
-    this.storage = StorageFactory.getStorage(settings("modelardb.storage").head)
-
-    /* Engine */
-    EngineFactory.startEngine(settings("modelardb.interface").head, settings("modelardb.engine").head, storage, models, batchSize, settings)
+    /* Configuration */
+    val configuration = readConfigurationFile(configPath)
 
     /* Debug */
-    if (settings.contains("modelardb.debug")) {
-      Static.writeDebugFile(settings("modelardb.debug")(0), this.storage, initTimeSeries(0)(0), this.error)
+    if (configuration.contains("modelardb.debug.dimensions")) {
+      Static.writeDimensionDebugFile(configuration.getString("modelardb.debug.dimensions"), configuration.getDimensions)
+      System.exit(0)
+    }
+
+    /* Storage */
+    val storage = StorageFactory.getStorage(configuration.getString("modelardb.storage"))
+
+    /* Engine */
+    EngineFactory.startEngine(
+      configuration.getString("modelardb.interface"), configuration.getString("modelardb.engine"),
+      storage, configuration.getModels, configuration.getInteger("modelardb.batch"))
+
+    /* Debug */
+    if (configuration.contains("modelardb.debug.models")) {
+      Static.writeModelDebugFile(configuration.getString("modelardb.debug.models"), storage,
+        Partitioner.initializeTimeSeries(configuration, 0)(0), configuration.getError)
     }
 
     /* Cleanup */
-    this.storage.close()
+    storage.close()
 
-    //Hack to force Spark and associated connections to exit after we are done
+    //HACK: some engine and storage providers makes the main process hang despite being terminated beforehand
     Static.SIGTERM()
   }
 
-  def buildWorkingSets(timeSeries: Array[TimeSeries], partitions: Int): Iterator[WorkingSet] = {
-    val partitionBy = settings("modelardb.partitionby").head
-
-    val pts = partitionBy match {
-      case "rate" => Static.partitionTimeSeriesByRate(timeSeries, partitions)
-      case "length" => Static.partitionTimeSeriesByLength(timeSeries, partitions)
-      case _ => throw new UnsupportedOperationException("unknown setting \"" + partitionBy + "\" in config file")
-    }
-
-    pts.asScala.map(new WorkingSet(_, this.models, this.error, this.latency, this.limit))
-  }
-
-  def initTimeSeries(currentMaximumSID: Int): Array[TimeSeries] = {
-    var cms: Int = currentMaximumSID
-    val sources = settings("modelardb.source")
-    val tss = ArrayBuffer[TimeSeries]()
-
-    val separator = this.settings("modelardb.separator").head
-    val header = this.settings("modelardb.header").head.toBoolean
-    val timestamps = this.settings("modelardb.timestamps").head.toInt
-    val dateFormat = this.settings("modelardb.dateformat").head
-    val timezone = this.settings("modelardb.timezone").head
-    val values = this.settings("modelardb.values").head.toInt
-    val locale = this.settings("modelardb.locale").head
-
-    //HACK: The resolution is given as one argument as each data set only contains time series with the same sampling interval
-    val resolution = this.resolution
-
-    for (source: String <- sources) {
-      cms += 1
-      val ts = if (source.contains(":")) {
-        //The locations is an address with port
-        val ipSplitPort = source.split(":")
-        new TimeSeries(ipSplitPort(0), ipSplitPort(1).toInt, cms, resolution, separator, header, timestamps, dateFormat, timezone, values, locale)
-      } else {
-        //The locations is an csv file without a .csv suffix
-        new TimeSeries(source, cms, resolution, separator, header, timestamps, dateFormat, timezone, values, locale)
-      }
-      tss.append(ts)
-    }
-    tss.toArray
-  }
-
   /** Private Methods **/
-  private def readConfigFile(configPath: String): HashMap[String, List[String]] = {
-    val settings = collection.mutable.HashMap[String, List[String]]()
+  private def readConfigurationFile(configPath: String): Configuration = {
+    Static.info(s"ModelarDB: $configPath")
+    val configuration = new Configuration()
     val models = ArrayBuffer[String]()
     val sources = ArrayBuffer[String]()
+    val correlations = ArrayBuffer[Correlation]()
 
+
+    //The information about dimensions are extracted first so correlation objects can depends on it being available
+    val dimensionLines = Source.fromFile(configPath).getLines().map(_.trim).filter(_.startsWith("modelardb.dimensions"))
+    val dimensions: Dimensions = if (dimensionLines.nonEmpty) {
+      val lineSplit = dimensionLines.toStream.last.trim().split(" ", 2)
+      configuration.add("modelardb.dimensions", readDimensionsFile(lineSplit(1)))
+      configuration.getDimensions
+    } else {
+      null
+    }
+
+    //Parses everything but modelardb.dimensions as dimensions are already initialized
     for (line <- Source.fromFile(configPath).getLines().filter(_.nonEmpty)) {
       //Parsing is performed naively and will terminate if the config is malformed.
       val lineSplit = line.trim().split(" ", 2)
       lineSplit(0) match {
         case "modelardb.model" => models.append(lineSplit(1))
         case "modelardb.source" => appendSources(lineSplit(1), sources)
-        case "modelardb.engine" | "modelardb.interface" | "modelardb.latency" | "modelardb.limit" |  "modelardb.partitionby" |
-             "modelardb.spark.receivers" | "modelardb.spark.streaming" | "modelardb.batch" | "modelardb.storage" | "modelardb.separator" |
-             "modelardb.header" | "modelardb.timestamps" | "modelardb.dateformat" | "modelardb.timezone" | "modelardb.values" | "modelardb.locale" |
-             "modelardb.error" | "modelardb.resolution" | "modelardb.debug" =>
-          settings.put(lineSplit(0), List(lineSplit(1).stripPrefix("'").stripSuffix("'")))
+        case "modelardb.dimensions" => //Purposely empty as the last modelardb.dimensions have already been parsed
+        case "modelardb.correlation" => correlations.append(parseCorrelation(lineSplit(1).trim, dimensions))
+        case "modelardb.resolution" =>
+          //Java in general works with timestamps in millisecond but time in the configuration file is in seconds
+          configuration.add("modelardb.resolution", (lineSplit(1).toDouble * 1000).toInt)
+        case "modelardb.engine" | "modelardb.interface" | "modelardb.latency" | "modelardb.limit" |
+             "modelardb.partitionby" | "modelardb.dynamicsplitfraction"  |  "modelardb.batch" | "modelardb.spark.receivers" |
+             "modelardb.spark.streaming" | "modelardb.storage" | "modelardb.separator" | "modelardb.header" |
+             "modelardb.timestamps" | "modelardb.dateformat" | "modelardb.timezone" | "modelardb.values" |
+             "modelardb.locale" | "modelardb.error" | "modelardb.debug.models" | "modelardb.debug.dimensions" =>
+          configuration.add(lineSplit(0), lineSplit(1).stripPrefix("'").stripSuffix("'"))
         case _ =>
           if (lineSplit(0).charAt(0) != '#') {
-            throw new UnsupportedOperationException("unknown setting \"" + lineSplit(0) + "\" in config file")
+            throw new UnsupportedOperationException("ModelarDB: unknown setting \"" + lineSplit(0) + "\" in config file")
           }
       }
     }
-    settings.put("modelardb.models", models.toList)
-    settings.put("modelardb.source", sources.toList)
-    collection.immutable.HashMap(settings.toSeq: _*)
+
+    configuration.add("modelardb.model", models.toArray)
+    configuration.add("modelardb.source", sources.toArray)
+    configuration.add("modelardb.correlation", correlations.toArray)
+    configuration
   }
 
   private def appendSources(pathName: String, sources: ArrayBuffer[String]): Unit = {
     val file = new File(pathName)
+    if ( (pathName.contains("*") && ! file.getParentFile.exists()) && ! file.exists()) {
+      throw new IllegalArgumentException("ModelarDB: file/folder \"" + pathName + "\" do no exist")
+    }
+
     file match {
       case _ if file.isFile => sources.append(pathName)
-      case _ if file.isDirectory => sources.appendAll(file.list)
+      case _ if file.isDirectory =>
+        val files = file.listFiles.filterNot(_.isHidden).map(file => file.getAbsolutePath)
+        sources.appendAll(files)
       case _ if file.getName.contains("*") =>
-        //NOTE: Simple glob parser that only works if it is a full path globbing files with a suffix
+        //NOTE: simple glob parser that only works if it is a full path globbing files with a suffix
         val folder = file.getParentFile
         val matcher = FileSystems.getDefault.getPathMatcher("glob:" + file.getName)
-        val files = folder.list.filter(str => matcher.matches(Paths.get(str)))
-        sources.appendAll(files.sorted.map(folder.getPath + '/' + _))
-      //The path is not a file but contains a semicolon so it must be a socket we can read from
+        val files = folder.listFiles.filterNot(_.isHidden).filter(file => matcher.matches(Paths.get(file.getName)))
+        sources.appendAll(files.sorted.map(file => file.toString))
+      //The path is not a file but contains a semicolon so it is assumed to be an IP and port number
       case _ if pathName.contains(":") => sources.append(pathName)
       case _ =>
-        throw new UnsupportedOperationException("source \"" + pathName + "\" in config file does not exist")
+        throw new IllegalArgumentException("ModelarDB: source \"" + pathName + "\" in config file does not exist")
     }
   }
 
-  /** Instance Variables **/
-  private var storage: Storage = _
-  private var models: Array[String] = _
-  private var error: Float = 0.0F
-  private var latency: Int = 0
-  private var limit: Int = 0
-  private var resolution: Int = 0
-  private var settings: HashMap[String, List[String]] = _
+  private def readDimensionsFile(dimensionPath: String): Dimensions = {
+    Static.info(s"ModelarDB: $dimensionPath")
+    //The user explicitly specified that no dimensions exist
+    if (dimensionPath.equalsIgnoreCase("none")) {
+      return new Dimensions(Array())
+    }
+
+    //Checks if the user have specified a schema inline, and if not, ensures that the dimensions file exists
+    if ( ! new File(dimensionPath).exists()) {
+      val dimensions = dimensionPath.split(';').map(_.trim)
+      if (dimensions(0).split(',').length < 2) {
+        //A schema with a dimension that has no levels is invalid, so this must be a missing file
+        throw new IllegalArgumentException("ModelarDB: file \"" + dimensionPath + "\" does no exist")
+      }
+      return new Dimensions(dimensions)
+    }
+
+    //Parses a dimensions file with the format (Table Definitions+, Empty Line, Rows+)
+    val lines = Source.fromFile(dimensionPath).getLines()
+    var line: String = " "
+
+    //Parses each dimension defined in the dimensions file
+    val tables = mutable.Buffer[String]()
+    while (lines.hasNext && line.nonEmpty) {
+      line = lines.next().trim
+      if (line.nonEmpty) {
+        tables.append(line)
+      }
+    }
+    val dimensions = new Dimensions(tables.toArray)
+
+    //Skips the empty lines separating dimension definitions and rows
+    lines.dropWhile(_.isEmpty)
+
+    //Parses each row in the dimensions file
+    line = " "
+    while (lines.hasNext && line.nonEmpty) {
+      line = lines.next().trim
+      if (line.nonEmpty) {
+        dimensions.add(line)
+      }
+    }
+    dimensions
+  }
+
+  private def parseCorrelation(line: String, dimensions: Dimensions): Correlation = {
+
+    //The line is split into correlations and scaling factors
+    var split = line.split('*')
+    val correlations = split(0).split(',').map(_.trim)
+    val scaling = if (split.length > 1) split(1).split(',').map(_.trim) else Array[String]()
+    val correlation = new Correlation()
+
+    //The correlation is either specified as a set of sources, a set of LCA levels, a set of members, or a distance
+    for (elem <- correlations) {
+      split = elem.split(' ').map(_.trim)
+      if (Static.isFloat(split(0))) {
+        //Distance
+        correlation.setDistance(split(0).toFloat)
+      } else if (split.length == 2 && Static.isInteger(split(1).trim)) {
+        //Dimensions and LCA level
+        correlation.addDimensionAndLCA(split(0).trim, split(1).trim.toInt, dimensions)
+      } else if (split.length >= 3 && Static.isInteger(split(1).trim)) {
+        //Dimension, level, and members
+        correlation.addDimensionAndMember(split(0).trim, split(1).trim.toInt, split.drop(2), dimensions)
+      } else {
+        //Sources
+        correlation.addSources(split)
+      }
+    }
+
+    //Scaling factors are defined for either dimensions and members or for time series
+    for (elem <- scaling) {
+      split = elem.split(' ')
+      if (split.length == 2) {
+        //Sets the scaling factor for time series from specific sources
+        correlation.addScalingFactorForSource(split(0).trim, split(1).trim.toInt)
+      } else if (split.length == 4) {
+        //Sets the scaling factor for time series with specific members
+        correlation.addScalingFactorForMember(split(0).trim, split(1).trim.toInt, split(2).trim, split(3).trim.toFloat, dimensions)
+      } else {
+        throw new IllegalArgumentException("ModelarDB: unable to parse scaling factors \"" + elem + "\"")
+      }
+    }
+    correlation
+  }
 }

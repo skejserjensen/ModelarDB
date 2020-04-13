@@ -14,19 +14,8 @@
  */
 package dk.aau.modelardb.core.utility;
 
-public class LinearFunction {
+import java.io.Serializable;
 
-    /** Constructors **/
-    public LinearFunction(long ts, double vs, long te, double ve) {
-        this.a = (ve - vs) / (te - ts);
-        this.b = vs - a * ts;
-    }
-
-    /** Public Methods **/
-    public double get(long ts) {
-        return this.a * ts + this.b;
-    }
-
-    /** Instance Variables **/
-    public final double a, b;
+public interface SegmentFunction extends Serializable {
+    void emit(int gid, long startTime, long endTime, int mid, byte[] parameters, byte[] gaps);
 }

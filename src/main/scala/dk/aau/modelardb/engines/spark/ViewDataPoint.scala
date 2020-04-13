@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,31 +13,33 @@
  * limitations under the License.
  */
 package dk.aau.modelardb.engines.spark
-
 import java.sql.Timestamp
 
+import dk.aau.modelardb.core.utility.Static
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{Row, SQLContext, sources}
 
-class ViewDataPoint()(@transient override val sqlContext: SQLContext)
+class ViewDataPoint(dimensions: Array[StructField]) (@transient override val sqlContext: SQLContext)
   extends BaseRelation with PrunedFilteredScan {
 
   /** Public Methods **/
   override def schema = StructType(Seq(
     StructField("sid", IntegerType, nullable = false),
     StructField("ts", TimestampType, nullable = false),
-    StructField("val", FloatType, nullable = false)))
+    StructField("val", FloatType, nullable = false))
+    ++ dimensions)
 
   override def unhandledFilters(filters: Array[Filter]): Array[Filter] = filters
 
   override def buildScan(requiredColumns: Array[String], filters: Array[Filter]): RDD[Row] = {
-    //DEBUG: prints the columns and predicates Spark have pushed to the view
-    println("ModelarDB: data point required columns { " + requiredColumns.mkString(" ") + " }")
-    println("ModelarDB: data point filters { " + filters.mkString(" ") + " }")
+    //DEBUG: prints the columns and predicates spark expects from the view
+    Static.info("ModelarDB: data point required columns { " + requiredColumns.mkString(" ") + " }")
+    Static.info("ModelarDB: data point filters { " + filters.mkString(" ") + " }")
 
-    SparkGridder.dataPointProjection(getDataPointRDD(filters), requiredColumns)
+    val rows = getDataPointRDD(filters)
+    SparkGridder.dataPointProjection(rows, requiredColumns)
   }
 
   /** Private Methods **/
@@ -60,10 +62,16 @@ class ViewDataPoint()(@transient override val sqlContext: SQLContext)
         case sources.EqualTo("ts", value: Timestamp) => df =
           df.filter(s"st <= CAST('$value' AS TIMESTAMP) AND et >= CAST('$value' AS TIMESTAMP)")
 
+        //All equal predicates on the dimensional columns can be pushed directly to the segment view for conversion to Sids
+        case sources.EqualTo(column: String, value: Any) if column != "val" => df = if (value.isInstanceOf[String])
+          df.filter(s"$column = '$value'") else df.filter(s"$column = $value")
+
         //The predicate cannot be supported by the segment view so all we can do is inform the user
-        case p => println("ModelarDB: unsupported predicate for DataPointView predicate push-down " + p)
+        case p => Static.warn("ModelarDB: unsupported predicate for DataPointView predicate push-down " + p)
       }
     }
+    //Dimensions will be appended to each data point so they are not requested for each segment
+    df = df.select("sid", "st", "et", "res", "mid", "param", "gaps")
     df.rdd
   }
 }

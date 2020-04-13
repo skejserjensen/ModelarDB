@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,11 +24,9 @@ import com.datastax.driver.core._
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.CassandraConnector
 import com.datastax.spark.connector.rdd.CassandraTableScanRDD
-
-import dk.aau.modelardb.core.{Storage, TimeSeries}
-import dk.aau.modelardb.core.models.Segment
-import dk.aau.modelardb.engines.spark.SparkStorage
-
+import dk.aau.modelardb.core.utility.Static
+import dk.aau.modelardb.core.{Dimensions, SegmentGroup, Storage, TimeSeriesGroup}
+import dk.aau.modelardb.engines.spark.{Spark, SparkStorage}
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources.Filter
@@ -36,218 +34,272 @@ import org.apache.spark.sql.{Row, SparkSession, sources}
 
 import scala.collection.JavaConverters._
 
-class CassandraSparkStorage(val host: String) extends Storage with SparkStorage {
+class CassandraSparkStorage(connectionString: String) extends Storage with SparkStorage {
 
   /* Public Methods */
-  def open(): Unit = {
-    //DEBUG: username and password hardcoded for development
+  override def open(dimensions: Dimensions): Unit = {
+    val (host, user, pass) = parseConnectionString(connectionString)
     this.connector = CassandraConnector(new SparkConf()
       .set("spark.cassandra.connection.host", host)
-      .set("spark.cassandra.auth.username", "cassandra")
-      .set("spark.cassandra.auth.password", "cassandra"))
-    initialize()
+      .set("spark.cassandra.auth.username", user)
+      .set("spark.cassandra.auth.password", pass))
+    createTables(dimensions)
   }
 
-  def getMaxSID: Int = {
-    val rows = this.connector.openSession().execute("SELECT DISTINCT sid FROM modelardb.source")
-
-    //Extracts the maximum sid manually as Cassandra does not like aggregate queries
-    var maxSID = 0
-    val sids = rows.iterator()
-    while (sids.hasNext) {
-      val currentSID = sids.next.getVarint(0).intValueExact()
-      if (currentSID > maxSID) {
-        maxSID = currentSID
-      }
-    }
-    maxSID
+  override def getMaxSID: Int = {
+    getMaxID(s"SELECT DISTINCT sid FROM ${this.keyspace}.source")
   }
 
-  def init(timeSeries: Array[TimeSeries], modelNames: Array[String]): Unit = {
-    //Uses a manual Cassandra session through the shared session proxy
+  override def getMaxGID: Int = {
+    getMaxID(s"SELECT gid FROM ${this.keyspace}.source")
+  }
+
+  override def initialize(timeSeriesGroups: Array[TimeSeriesGroup], dimensions: Dimensions, modelNames: Array[String]): Unit = {
     val session = this.connector.openSession()
 
-    //Extract all model names from storage
-    var stmt = new SimpleStatement("SELECT * FROM modelardb.model")
+    //Gaps are encoded using 64 bits integers so groups must be at most 64 time series
+    if (timeSeriesGroups.nonEmpty && timeSeriesGroups.map(tsg => tsg.size()).max > 64) {
+      throw new IllegalArgumentException("ModelarDB: CassandraSparkStorage groups must be less than 64 time series")
+    }
+
+    //Inserts the metadata for the sources defined in the configuration file (Sid, Scaling, Resolution, Gid, Dimensions)
+    val sourceDimensions = dimensions.getColumns.length
+    val columns = if (sourceDimensions == 0) "" else dimensions.getColumns.mkString(", ", ", ", "")
+    val placeholders = "?, " * (sourceDimensions + 3) + "?"
+    val insertString = s"INSERT INTO ${this.keyspace}.source(sid, scaling, resolution, gid $columns) VALUES($placeholders)"
+    for (tsg <- timeSeriesGroups) {
+      for (ts <- tsg.getTimeSeries) {
+        val metadata = new util.HashMap[String, Object]()
+        metadata.put("sid", BigInteger.valueOf(ts.sid.toLong))
+        metadata.put("scaling", ts.getScalingFactor.asInstanceOf[Object])
+        metadata.put("resolution", BigInteger.valueOf(ts.resolution))
+        metadata.put("gid", BigInteger.valueOf(tsg.gid))
+
+        for (dim <- dimensions.getColumns.zip(dimensions.get(ts.source))) {
+          metadata.put(dim._1, dim._2)
+        }
+        session.execute(insertString, metadata)
+      }
+    }
+
+    //Extracts all metadata for the sources in storage
+    var stmt = new SimpleStatement(s"SELECT * FROM ${this.keyspace}.source")
     var results = session.execute(stmt)
+    val sourcesInStorage = new util.HashMap[Integer, Array[Object]]()
+    var rows = results.iterator()
+    while (rows.hasNext) {
+      //The metadata is stored as (Sid => Scaling, Resolution, Gid, Dimensions)
+      val row = rows.next
+      val sid = row.getVarint(0).intValueExact()
+      val metadata = new util.ArrayList[Object]()
+      metadata.add(row.getFloat("scaling").asInstanceOf[Object])
+      metadata.add(row.getVarint("resolution").intValueExact().asInstanceOf[Object])
+      metadata.add(row.getVarint("gid").intValueExact().asInstanceOf[Object])
+
+      //Dimensions
+      for (column <- dimensions.getColumns) {
+        metadata.add(row.getObject(column))
+      }
+      sourcesInStorage.put(sid, metadata.toArray)
+    }
+
+    //Extracts all model names from storage
+    stmt = new SimpleStatement(s"SELECT * FROM ${this.keyspace}.model")
+    results = session.execute(stmt)
     val modelsInStorage = new util.HashMap[String, Integer]()
 
-    var rows = results.iterator()
+    rows = results.iterator()
     while (rows.hasNext) {
       val row = rows.next
       val value = row.getVarint(0).intValueExact()
       modelsInStorage.put(row.getString(1), value)
     }
 
-    //Extract all the metadata for the sources in storage
-    stmt = new SimpleStatement("SELECT * FROM modelardb.source")
-    results = session.execute(stmt)
-    val sourcesInStorage = new util.HashMap[Integer, Integer]()
+    //Initializes the storage caches
+    val modelsToInsert = super.initializeCaches(modelNames, dimensions, modelsInStorage, sourcesInStorage)
 
-    rows = results.iterator()
-    while (rows.hasNext) {
-      val row = rows.next
-      val k = row.getVarint(0).intValueExact()
-      val v = row.getVarint(1).intValueExact()
-      sourcesInStorage.put(k, v)
-    }
-
-    //Initialize the storage caches
-    val toInsert = super.initCaches(timeSeries, modelNames, modelsInStorage, sourcesInStorage)
-
-    //Insert the model name for all the models in the config but not in storage
-    var insertStmt = session.prepare("INSERT INTO modelardb.model(mid, name) VALUES(?, ?)")
-    for ((k, v) <- toInsert._1.asScala) {
+    //Inserts the model's names for all of the models in the configuration file but not in storage
+    val insertStmt = session.prepare(s"INSERT INTO ${this.keyspace}.model(mid, name) VALUES(?, ?)")
+    for ((k, v) <- modelsToInsert.asScala) {
       session.execute(
         insertStmt
           .bind()
-          .setVarint(0, BigInteger.valueOf(v.longValue()))
+          .setVarint(0, BigInteger.valueOf(v.toLong))
           .setString(1, k))
-    }
-
-    //Insert the resolution for all the sources in the config but not in storage
-    insertStmt = session.prepare("INSERT INTO modelardb.source(sid, resolution) VALUES(?, ?)")
-    for ((k, v) <- toInsert._2.asScala) {
-      session.execute(
-        insertStmt
-          .bind()
-          .setVarint(0, BigInteger.valueOf(k.longValue()))
-          .setVarint(1, BigInteger.valueOf(v.longValue())))
     }
     session.close()
 
-    //Stores the current max sid for later as it should not be increased outside ModelarDB
+    //Stores the current max sid for later as it is assumed to not be increased outside ModelarDB
     this.currentMaxSID = getMaxSID
   }
 
-  def close(): Unit = {
-    //NOTE: The Cassandra connector need not be closed explicitly as it lives with the Spark Session
+  override def close(): Unit = {
+    //NOTE: the Cassandra connector need not be closed explicitly as it is managed by the Spark Session
   }
 
-  def insert(segments: Array[Segment], size: Int): Unit = {
+  override def insert(segments: Array[SegmentGroup], size: Int): Unit = {
+    val session = this.connector.openSession()
+
     val batch = new BatchStatement()
+    batch.setIdempotent(true)
     for (segment <- segments.take(size)) {
-      val segmentName = segment.getClass.getName
-      val size = BigInteger.valueOf((segment.endTime - segment.startTime) / segment.resolution)
-      val mid = BigInteger.valueOf(this.midCache.get(segmentName).toLong)
+      val gmdc = this.groupMetadataCache(segment.gid)
+      val resolution = gmdc(0)
+      val gaps = Static.gapsToBits(segment.offsets, gmdc)
+      val size = BigInteger.valueOf((segment.endTime - segment.startTime) / resolution)
+      val mid = BigInteger.valueOf(segment.mid.toLong)
 
       val boundStatement = insertStmt.bind()
-        .setVarint(0, BigInteger.valueOf(segment.sid))
-        .setVarint(1, size)
-        .setTimestamp(2, new Timestamp(segment.endTime))
-        .setVarint(3, mid)
-        .setBytes(4, ByteBuffer.wrap(segment.parameters()))
-        .setBytes(5, ByteBuffer.wrap(segment.gaps()))
+        .setVarint(0, BigInteger.valueOf(segment.gid))
+        .setVarint(1, BigInteger.valueOf(gaps))
+        .setVarint(2, size)
+        .setTimestamp(3, new Timestamp(segment.endTime))
+        .setVarint(4, mid)
+        .setBytes(5, ByteBuffer.wrap(segment.parameters))
       batch.add(boundStatement)
-    }
 
-    //Uses a manual Cassandra session through the shared session proxy
-    val session = this.connector.openSession()
+      //Cassandra limits the maximum size of a batch
+      if (batch.size() == 65535) {
+        session.execute(batch)
+        batch.clear()
+      }
+    }
     session.execute(batch)
     session.close()
   }
 
-  def getSegments: Stream[Segment] = {
-    val results = this.connector.openSession().execute("SELECT * FROM modelardb.segment")
-    val rc = this.resolutionCache
+  override def getSegments: Stream[SegmentGroup] = {
+    val results = this.connector.openSession().execute(s"SELECT * FROM ${this.keyspace}.segment")
+    val gmdc = this.groupMetadataCache
 
     java.util.stream.StreamSupport.stream(results.spliterator(), false).map(
-      new java.util.function.Function[com.datastax.driver.core.Row, Segment] {
-        override def apply(row: com.datastax.driver.core.Row): Segment = {
-          val sid = row.getVarint("sid").intValue()
+      new java.util.function.Function[com.datastax.driver.core.Row, SegmentGroup] {
+        override def apply(row: com.datastax.driver.core.Row): SegmentGroup = {
+          val gid = row.getVarint("gid").intValue()
+          val gaps = row.getVarint("gaps").longValue()
           val size: Long = row.getVarint("size").longValue()
           val endTime = row.getTimestamp("end_time").getTime
           val mid = row.getVarint("mid").intValue()
           val params = row.getBytes("parameters")
-          val gaps = row.getBytes("gaps")
 
-          //Retrieve the cached constructor for the segment and build it
-          val resolution = rc(sid)
-          val startTime = endTime - (size * resolution)
-          constructSegment(sid, startTime, endTime, mid, params.array, gaps.array)
+          //Reconstructs the gaps array from the bit flag
+          val gapsArray = Static.bitsToGaps(gaps, gmdc(gid))
+
+          //Reconstructs the actual start time of the segment
+          val startTime = endTime - (size * gmdc(gid)(0))
+          new SegmentGroup(gid, startTime, endTime, mid, params.array, gapsArray)
         }
       })
   }
 
-  def open(ssb: SparkSession.Builder): SparkSession = {
-    //DEBUG: username and password hardcoded for development
+  override def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession = {
+    val (host, user, pass) = parseConnectionString(connectionString)
     this.sparkSession = ssb
       .config("spark.cassandra.connection.host", host)
-      .config("spark.cassandra.auth.username", "cassandra")
-      .config("spark.cassandra.auth.password", "cassandra")
+      .config("spark.cassandra.auth.username", user)
+      .config("spark.cassandra.auth.password", pass)
       .getOrCreate()
     this.connector = CassandraConnector(this.sparkSession.sparkContext)
-    initialize()
+    createTables(dimensions)
     this.sparkSession
   }
 
-  def writeRDD(rdd: RDD[Row]): Unit = {
+  override def writeRDD(rdd: RDD[Row]): Unit = {
+    val gmdc = this.groupMetadataCache
     rdd.map(row => {
+      val gid = row.getInt(0)
+      val gaps = Static.gapsToBits(row.getAs[Array[Byte]](5), gmdc(gid))
       val ts = row.getTimestamp(1).getTime
       val te = row.getTimestamp(2).getTime
-      val res = row.getInt(3)
+      val res = gmdc(gid)(0)
       val size = (te - ts) / res
-      (row.getInt(0), size, te, row.getInt(4), row.getAs[Array[Byte]](5), row.getAs[Array[Byte]](6))
-    }).saveToCassandra("modelardb", "segment", SomeColumns("sid", "size", "end_time", "mid", "parameters", "gaps"))
+
+      (gid, gaps, size, te, row.getInt(3), row.getAs[Array[Byte]](4))
+
+    }).saveToCassandra(this.keyspace, "segment", SomeColumns("gid", "gaps", "size", "end_time", "mid", "parameters"))
   }
 
-  def getRDD(filters: Array[Filter]): RDD[Row] = {
-    //Setup the mappings from Apache Cassandra rows to Apache Spark rows and the rdd representing the full table
+  override def getRDD(filters: Array[Filter]): RDD[Row] = {
+    //The mapping from Cassandra rows to Spark rows must be stored in a local variable to not serialize the object
     val rowsToRows = getRowsToRows
-    val rdd = this.sparkSession.sparkContext.cassandraTable("modelardb", "segment")
+    val rdd = this.sparkSession.sparkContext.cassandraTable(this.keyspace, "segment")
 
-    //Constructs a CQL WHERE clause and maximum start time for Apache Spark to filter rows by from the filters
+    //Constructs a CQL WHERE clause and the maximum start time Apache Spark should read rows until
     constructPredicate(filters) match {
-      case (null, null) =>
+      case (null, null, null) =>
         rdd.map(rowsToRows)
-      case (null, maxStartTime) =>
+      case (null, maxStartTime, null) =>
         takeWhile(rdd, rowsToRows, maxStartTime)
-      case (predicate, null) =>
+      case (predicate, null, null) =>
         rdd.where(predicate).map(rowsToRows)
-      case (predicate, maxStartTime) =>
+      case (predicate, maxStartTime, null) =>
         takeWhile(rdd.where(predicate), rowsToRows, maxStartTime)
+      case (null, null, gids) =>
+        val rdds = gids.map(gid => rdd.where("gid = ?", gid))
+        this.sparkSession.sparkContext.union(rdds).map(rowsToRows)
     }
   }
 
   /** Private Methods **/
-  private def initialize() = {
-    //Creates the required tables using a manual Cassandra session through the shared session proxy
+  private def parseConnectionString(connectionString: String): (String, String, String) = {
+    val elems: Array[String] = connectionString.split('?')
+    if (elems.length != 1 && elems.length != 2) {
+      throw new IllegalArgumentException("ModelarDB: unable to parse connection string \"" + connectionString + "\"")
+    }
+
+    //Parses the parameters defined by key-value pairs after a ? char
+    val parsed = new util.HashMap[String, String]()
+    if (elems.length == 2) {
+      val params = elems(1).split('&')
+      for (param <- params) {
+        val na = param.split('=')
+        parsed.put(na(0), na(1))
+      }
+    }
+    this.keyspace = parsed.getOrDefault("keyspace", "modelardb")
+    (elems(0), parsed.getOrDefault("username", "cassandra"), parsed.getOrDefault("password", "cassandra"))
+  }
+
+  private def createTables(dimensions: Dimensions): Unit = {
     val session = this.connector.openSession()
     var createTable: SimpleStatement = null
-    createTable = new SimpleStatement("CREATE KEYSPACE IF NOT EXISTS modelardb WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };")
+    createTable = new SimpleStatement(s"CREATE KEYSPACE IF NOT EXISTS ${this.keyspace} WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };")
     session.execute(createTable)
 
-    createTable = new SimpleStatement("CREATE TABLE IF NOT EXISTS modelardb.segment(sid varint, size varint, end_time timestamp, mid varint, parameters blob, gaps blob, PRIMARY KEY (sid, end_time));")
+    createTable = new SimpleStatement(s"CREATE TABLE IF NOT EXISTS ${this.keyspace}.segment(gid VARINT, gaps VARINT, size VARINT, end_time TIMESTAMP, mid VARINT, parameters BLOB, PRIMARY KEY (gid, end_time, gaps));")
     session.execute(createTable)
 
-    createTable = new SimpleStatement("CREATE TABLE IF NOT EXISTS modelardb.model(mid varint, name ascii, PRIMARY KEY (mid));")
+    createTable = new SimpleStatement(s"CREATE TABLE IF NOT EXISTS ${this.keyspace}.model(mid VARINT, name TEXT, PRIMARY KEY (mid));")
     session.execute(createTable)
 
-    createTable = new SimpleStatement("CREATE TABLE IF NOT EXISTS modelardb.source(sid varint, resolution varint, PRIMARY KEY (sid));")
+    createTable = new SimpleStatement(s"CREATE TABLE IF NOT EXISTS ${this.keyspace}.source(sid VARINT, scaling FLOAT, resolution VARINT, gid VARINT ${dimensions.getSchema}, PRIMARY KEY (sid));")
     session.execute(createTable)
 
-    //Prepare the statement necessary for insertion
-    this.insertStmt = session.prepare("INSERT INTO modelardb.segment(sid, size, end_time, mid, parameters, gaps) VALUES(?, ?, ?, ?, ?, ?)")
+    //The insert statement will be used for every batch of segments
+    this.insertStmt = session.prepare(s"INSERT INTO ${this.keyspace}.segment(gid, gaps, size, end_time, mid, parameters) VALUES(?, ?, ?, ?, ?, ?)")
     session.close()
   }
 
-  private def constructPredicate(filters: Array[Filter]): (String, Timestamp) = {
+  private def constructPredicate(filters: Array[Filter]): (String, Timestamp, Array[Int]) = {
     val predicates: scala.collection.mutable.ArrayBuffer[String] = scala.collection.mutable.ArrayBuffer()
     var minStartTime: Timestamp = new Timestamp(Long.MaxValue)
+    val gid = scala.collection.mutable.Set[Int]()
+    val gidPushDownLimit = 1500
 
-    //Spark Documentation: All filters should be parsed as a set of conjunctions, OR is represented as a nested case class
-    //NOTE: This method expects segments to be sorted by end_time as fetching until a maximum start_time is done in Spark
+    //All filters should be parsed as a set of conjunctions as Spark represents OR as a nested case class
+    //NOTE: the segments retrieved must be sorted by end_time as Spark fetches segments until a maximum start_time
     for (filter: Filter <- filters) {
       filter match {
-        //Predicate push-down for sid using SELECT * FROM segment WHERE sid IN (..)
-        case sources.GreaterThan("sid", value: Int) => predicates.append(rangeToInQuery(value + 1, this.currentMaxSID))
-        case sources.GreaterThanOrEqual("sid", value: Int) => predicates.append(rangeToInQuery(value, this.currentMaxSID))
-        case sources.LessThan("sid", value: Int) => predicates.append(rangeToInQuery(1, value - 1))
-        case sources.LessThanOrEqual("sid", value: Int) => predicates.append(rangeToInQuery(1, value))
-        case sources.EqualTo("sid", value: Int) => predicates.append(s"sid = $value")
-        case sources.In("sid", values: Array[Any]) => predicates.append(s"sid IN ( ${values.mkString(", ")} )")
+        //Predicate push-down for gid using SELECT * FROM segment with GID = ? and gid IN (..)
+        case sources.EqualTo("gid", value: Int) => predicates.append(s"gid = $value")
+        case sources.EqualNullSafe("gid", value: Int) => predicates.append(s"gid = $value")
+        case sources.GreaterThan("gid", value: Int) if this.currentMaxSID - value + 1 <= gidPushDownLimit => gid ++= value + 1 to this.currentMaxSID
+        case sources.GreaterThanOrEqual("gid", value: Int) if this.currentMaxSID - value <= gidPushDownLimit => gid ++= value to this.currentMaxSID
+        case sources.LessThan("gid", value: Int) if value - 1 <= gidPushDownLimit => gid ++= 1 to value - 1
+        case sources.LessThanOrEqual("gid", value: Int) if value <= gidPushDownLimit => gid ++= 1 to value
+        case sources.In("gid", values: Array[Any]) if values.length <= gidPushDownLimit => gid ++= values.map(_.asInstanceOf[Int])
 
-        //Predicate half push-down with rows filtered by start time by Apache Spark
+        //Predicate push-down with rows ingested by Apache Spark until the requested start time
         case sources.LessThan("st", value: Timestamp) => if (value.before(minStartTime)) minStartTime = value; null
         case sources.LessThanOrEqual("st", value: Timestamp) => if (value.before(minStartTime)) minStartTime = value; null
 
@@ -259,56 +311,99 @@ class CassandraSparkStorage(val host: String) extends Storage with SparkStorage 
         case sources.EqualTo("et", value: Timestamp) => predicates.append(s"end_time = '$value'")
 
         //The predicate cannot be supported when using Apache Cassandra for storage so all we can do is inform the user
-        case p => println("ModelarDB: unsupported predicate for CassandraSparkStorage predicate push-down " + p); null
+        case p => Static.warn("ModelarDB: unsupported predicate for CassandraSparkStorage " + p, 120); null
       }
     }
 
     //The full predicate have been constructed and max start time have been extracted
     val pr = if (predicates.isEmpty) null else predicates.mkString(" AND ")
     val tr = if (minStartTime.getTime == Long.MaxValue) null else minStartTime
-    println(s"ModelarDB: constructed predicates ($pr, ResultSet.takeWhile(st <= $tr)")
-    (pr, tr)
-  }
-
-  private def rangeToInQuery(st: Int, et: Int): String = {
-    //Using in queries for a large number of partition key becomes slower then scans around 1500 keys
-    val range = et - st
-    if (range > 1500) {
-      return null
-    }
-    s"sid IN ( ${(st to et).mkString(", ")} )"
+    val gr = if (gid.isEmpty) null else gid.toArray
+    Static.info(s"ModelarDB: constructed predicates ($pr, takeWhile(st <= $tr, Gid IN ${gid.mkString(", ")})", 120)
+    (pr, tr, gr)
   }
 
   private def takeWhile(rdd: CassandraTableScanRDD[CassandraRow],
-                        rowsToRows: (CassandraRow => Row),
+                        rowsToRows: CassandraRow => Row,
                         maxStartTime: Timestamp): RDD[Row] = {
+
+    //For large data sets the reduced memory required makes a scan more efficient
+    if ( ! Spark.isDataSetSmall(rdd)) {
+      return rdd.map(rowsToRows)
+    }
+    Static.info("ModelarDB: limiting segments read using takeWhile")
+
+    //Read segments until the requested start time is reached for all time series
+    val gmdc = this.groupMetadataCache
+    val maxStartTimeRaw = maxStartTime.getTime
     rdd
-      .keyBy(_.getInt(0))
-      .spanByKey
-      .flatMap(_._2.map(rowsToRows).takeWhile((row: Row) => ! row.getTimestamp(1).after(maxStartTime)))
+      .spanBy(_.getInt(0))
+      .flatMap(pair => {
+        //Dynamic splitting creates multiple segment that match the predicate but with different gaps
+        var sids = Static.gapsToBits(Static.intToBytes(Array(gmdc(pair._1).drop(1):_*)), gmdc(pair._1))
+
+        //Segments are retrieved until a segment with a timestamp after maxStartTime is observed for all sids
+        pair._2.takeWhile((row: CassandraRow) => {
+          //Reconstructs the start time of the time series
+          val gid = row.getInt("gid")
+          val size = row.getVarInt("size").toLong
+          val endTime = row.getLong("end_time")
+          val startTime = endTime - (size * gmdc(gid)(0))
+
+          if (startTime > maxStartTimeRaw) {
+            val gaps = row.getVarInt("gaps").longValue()
+            if (gaps == 0) {
+              //A zero value means that the segments represents data from all time series in the groups
+              sids = 0
+            } else {
+              //Each one bit means that a time series is not represented by this segment
+              sids &= ~gaps
+            }
+          }
+          sids != 0
+        }).map(rowsToRows)
+      })
   }
 
-  private def getRowsToRows: (CassandraRow => Row) = {
-    val rc = this.resolutionCache
+  private def getRowsToRows: CassandraRow => Row = {
+    val gmdc = this.groupMetadataCache
 
-    //Converts the cassandra rows to spark rows and reconstruct start time as a long value
+    //Converts the Cassandra rows to Spark rows and reconstruct start time as a long value
     //Schema: Int, java.sql.Timestamp, java.sql.Timestamp, Int, Int, Array[Byte], Array[Byte]
     row => {
-      val sid = row.getInt("sid")
+      val gid = row.getInt("gid")
+      val gaps = row.getVarInt("gaps")
       val size: Long = row.getInt("size")
       val endTime = row.getLong("end_time")
       val mid = row.getInt("mid")
       val params = row.getBytes("parameters")
-      val gaps = row.getBytes("gaps")
 
-      //Retrieve the resolution cache so the actual rows can be reconstructed
-      val resolution = rc(sid)
-      val startTime = endTime - (size * resolution)
-      Row(sid, new Timestamp(startTime), new Timestamp(endTime), resolution, mid, params.array(), gaps.array())
+      //Reconstructs the gaps array from the bit flag
+      val gapsArray = Static.bitsToGaps(gaps.longValue(), gmdc(gid))
+
+      //Retrieves the resolution from the metadata cache so the actual rows can be reconstructed
+      val startTime = endTime - (size * gmdc(gid)(0))
+      Row(gid, new Timestamp(startTime), new Timestamp(endTime), mid, params.array(), gapsArray)
     }
   }
 
-  /** Instance Variable **/
+  private def getMaxID(query: String): Int = {
+    val rows = this.connector.openSession().execute(query)
+
+    //Extracts the maximum id manually as Cassandra does not like aggregate queries
+    var maxID = 0
+    val it = rows.iterator()
+    while (it.hasNext) {
+      val currentID = it.next.getVarint(0).intValueExact()
+      if (currentID > maxID) {
+        maxID = currentID
+      }
+    }
+    maxID
+  }
+
+  /** Instance Variables **/
+  private var keyspace: String = _
   private var currentMaxSID = 0
   private var connector: CassandraConnector = _
   private var insertStmt: PreparedStatement = _

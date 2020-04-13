@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ object StorageFactory {
 
   /** Public Methods **/
   def getStorage(connectionString: String): Storage = {
-    //Selection of the correct storage backend based on the connection string provided
+    //Selects the correct storage backend based on the connection string provided
     try {
       if (connectionString.startsWith("sqlite:")) {
         Class.forName("org.sqlite.JDBC")
@@ -31,12 +31,11 @@ object StorageFactory {
       } else if (connectionString.startsWith("cassandra:")) {
         new CassandraSparkStorage(connectionString.split("://")(1))
       } else {
-        throw new java.lang.IllegalArgumentException("unknown value for modelardb.storage in the config file")
+        throw new java.lang.IllegalArgumentException("ModelarDB: unknown value for modelardb.storage in the config file")
       }
     } catch {
-      case e: Exception =>
-        println(e)
-        throw new java.lang.IllegalArgumentException("failed to initialize modelardb.storage from the config file")
+      case _: Exception =>
+        throw new java.lang.IllegalArgumentException("ModelarDB: failed to initialize modelardb.storage from the config file")
     }
   }
 }

@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,35 +14,43 @@
  */
 package dk.aau.modelardb.core;
 
-import dk.aau.modelardb.core.models.ModelFactory;
-import dk.aau.modelardb.core.models.Segment;
 import dk.aau.modelardb.core.models.Model;
+import dk.aau.modelardb.core.models.ModelFactory;
 import dk.aau.modelardb.core.utility.Logger;
+import dk.aau.modelardb.core.utility.SegmentFunction;
+import dk.aau.modelardb.core.utility.Static;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.util.Arrays;
 import java.util.Iterator;
+import java.util.List;
+import java.util.StringJoiner;
 import java.util.function.BooleanSupplier;
-import java.util.function.Consumer;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 public class WorkingSet implements Serializable {
 
     /** Constructors **/
-    public WorkingSet(TimeSeries[] timeSeries, String[] models, float error, int latency, int limit) {
-        this.timeSeries = timeSeries;
+    public WorkingSet(TimeSeriesGroup[] timeSeriesGroups, float dynamicSplitFraction,
+                      String[] models, int[] mids, float error, int latency, int limit) {
+        this.timeSeriesGroups = timeSeriesGroups;
+        this.dynamicSplitFraction = (dynamicSplitFraction > 0.0F) ? 1.0F / dynamicSplitFraction : 0.0F;
         this.currentTimeSeries = 0;
         this.models = models;
+        this.mids = mids;
         this.error = error;
         this.latency = latency;
         this.limit = limit;
     }
 
     /** Public Methods **/
-    public void process(Consumer<Segment> consumeTemporary, Consumer<Segment> consumeFinalized,
+    public void process(SegmentFunction consumeTemporary, SegmentFunction consumeFinalized,
                         BooleanSupplier haveBeenTerminated) throws IOException {
-        //DEBUG: Initializes the timer stored in the logger
+        //DEBUG: initializes the timer stored in the logger
         this.logger.getTimeSpan();
         this.consumeTemporary = consumeTemporary;
         this.consumeFinalized = consumeFinalized;
@@ -51,42 +59,40 @@ public class WorkingSet implements Serializable {
         processBounded();
         processUnbounded();
 
-        //Ensure all channels are closed if something occurred while processing
-        for (TimeSeries ts : this.timeSeries) {
-            ts.close();
+        //Ensures all resources are closed
+        for (TimeSeriesGroup tsg : this.timeSeriesGroups) {
+            tsg.close();
         }
     }
 
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("==================================================================================================\n");
-        sb.append("Working Set [Current SID: ");
-        sb.append(this.timeSeries[this.currentTimeSeries].sid);
-        sb.append(" | Total TS: ");
-        sb.append(this.timeSeries.length);
-        sb.append(" | Current TS: ");
-        sb.append(this.currentTimeSeries + 1);
-        sb.append(" | Error: ");
-        sb.append(this.error);
-        sb.append(" | Latency: ");
-        sb.append(this.latency);
-        sb.append(" | Limit: ");
-        sb.append(this.limit);
-        sb.append("\n==================================================================================================");
-        return sb.toString();
+        return "====================================================================================================\n" +
+                "Working Set [Current GID: " +
+                this.timeSeriesGroups[this.currentTimeSeries].gid +
+                " | Total TSGs: " +
+                this.timeSeriesGroups.length +
+                " | Current TSG: " +
+                (this.currentTimeSeries + 1) +
+                " | Error: " +
+                this.error +
+                " | Latency: " +
+                this.latency +
+                " | Limit: " +
+                this.limit +
+                "\n====================================================================================================";
     }
 
     /** Private Methods **/
     private void processBounded() {
-        while (this.currentTimeSeries < this.timeSeries.length &&
-                this.timeSeries[this.currentTimeSeries].isBounded) {
-            //Check if the engine currently using this working set have been terminated
+        while (this.currentTimeSeries < this.timeSeriesGroups.length &&
+                this.timeSeriesGroups[this.currentTimeSeries].isBounded) {
+            //Checks if the engine currently ingesting from this working set has been terminated
             if (this.haveBeenTerminated.getAsBoolean()) {
                 return;
             }
 
             SegmentGenerator sg = getNextSegmentGenerator();
-            sg.consumeDataPoints();
+            sg.consumeAllDataPoints();
             sg.close();
             sg.logger.printGeneratorResult();
             this.logger.add(sg.logger);
@@ -94,29 +100,29 @@ public class WorkingSet implements Serializable {
     }
 
     private void processUnbounded() throws IOException {
-        //No unbounded time series sources were included in the configuration file or the engine is terminated
-        if (this.currentTimeSeries == this.timeSeries.length || this.haveBeenTerminated.getAsBoolean()) {
+        //There is no work to do if no unbounded time series were in the configuration file or if the engine is terminated
+        if (this.currentTimeSeries == this.timeSeriesGroups.length || this.haveBeenTerminated.getAsBoolean()) {
             return;
         }
         Selector selector = Selector.open();
         int unboundedChannelsRegistered = 0;
 
         //The time series are all attached to the selector to allow multiple iterations over the segment generators
-        while (this.currentTimeSeries < this.timeSeries.length) {
-            TimeSeries ts = this.timeSeries[this.currentTimeSeries];
+        while (this.currentTimeSeries < this.timeSeriesGroups.length) {
+            TimeSeriesGroup tsg = this.timeSeriesGroups[this.currentTimeSeries];
             SegmentGenerator sg = getNextSegmentGenerator();
-            ts.attachToSelector(selector, sg);
+            tsg.attachToSelector(selector, sg);
             unboundedChannelsRegistered++;
         }
 
         while (true) {
-            //Check if the engine currently using this working set have been terminated
+            //Checks if the engine currently ingesting from this working set have been terminated
             if (this.haveBeenTerminated.getAsBoolean()) {
                 selector.close();
                 return;
             }
 
-            //Block until a channel is ready and verify that channels actually were ready
+            //Blocks until a channel is ready and verifies that a channel is actually ready
             int readyChannels = selector.select();
             if (readyChannels == 0) {
                 continue;
@@ -126,12 +132,14 @@ public class WorkingSet implements Serializable {
             while (keyIterator.hasNext()) {
                 SelectionKey key = keyIterator.next();
                 if ( ! key.isReadable()) {
-                    throw new IOException("non-readable channel selected");
+                    throw new IOException("CORE: non-readable channel selected");
                 }
 
-                //Process the data points with the segment generator and closes the channel if a punctuation is seen
+                //Processes the data points with the segment generator and closes the channel if an error occur
                 SegmentGenerator sg = (SegmentGenerator) key.attachment();
-                if ( ! sg.consumeDataPoints()) {
+                try {
+                    sg.consumeAllDataPoints();
+                } catch (RuntimeException re) {
                     sg.close();
                     sg.logger.printGeneratorResult();
                     this.logger.add(sg.logger);
@@ -152,26 +160,49 @@ public class WorkingSet implements Serializable {
 
     private SegmentGenerator getNextSegmentGenerator() {
         int index = this.currentTimeSeries++;
-        TimeSeries ts = this.timeSeries[index];
-        ts.init.run();
-        Model[] mgModels = ModelFactory.getModels(this.models, this.error, this.limit);
+        TimeSeriesGroup tsg = this.timeSeriesGroups[index];
+        tsg.initialize();
+        Supplier<Model[]> modelsInitializer = () -> ModelFactory.getModels(models, mids, error, limit);
         Model fallbackModel = ModelFactory.getFallbackModel(this.error, this.limit);
-        return new SegmentGenerator(ts, mgModels, fallbackModel,
-                this.latency, this.consumeTemporary, this.consumeFinalized);
+        List<Integer> sids = null;
+        if (this.dynamicSplitFraction != 0.0F) {
+            sids = Arrays.stream(tsg.getTimeSeries()).map(ts -> ts.sid).collect(Collectors.toList());
+        }
+
+        //The source the data is ingested from is printed before ingestion is done to simplify debugging deadlocks
+        if (this.currentTimeSeries > 1) {
+            System.out.println("---------------------------------------------------------");
+        }
+        System.out.println("GID: " + tsg.gid);
+        System.out.println("SIDs: " + getSids(tsg));
+        System.out.println("Source: " + tsg.getSource());
+        System.out.println("Ingested: " + Static.getIPs());
+        return new SegmentGenerator(tsg, modelsInitializer, fallbackModel, sids, this.latency,
+                this.dynamicSplitFraction, this.consumeTemporary, this.consumeFinalized);
     }
 
-    /** Instance Variable **/
+    private String getSids(TimeSeriesGroup timeSeriesGroup) {
+        StringJoiner sj = new StringJoiner(",", "{", "}");
+        for (TimeSeries ts : timeSeriesGroup.getTimeSeries()) {
+            sj.add(Integer.toString(ts.sid));
+        }
+        return sj.toString();
+    }
+
+    /** Instance Variables **/
     private int currentTimeSeries;
-    private Consumer<Segment> consumeTemporary;
-    private Consumer<Segment> consumeFinalized;
+    private SegmentFunction consumeTemporary;
+    private SegmentFunction consumeFinalized;
     private BooleanSupplier haveBeenTerminated;
 
-    private final TimeSeries[] timeSeries;
+    private final TimeSeriesGroup[] timeSeriesGroups;
+    private final float dynamicSplitFraction;
     private final String[] models;
+    private final int[] mids;
     private final float error;
     private final int latency;
     private final int limit;
 
-    //DEBUG: logger storing various debug counters and methods
-    public Logger logger = new Logger();
+    //DEBUG: the logger provides various counters and methods for debugging
+    public final Logger logger = new Logger();
 }

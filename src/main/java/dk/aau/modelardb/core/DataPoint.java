@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ public class DataPoint {
 
     /** Public Methods **/
     public String toString() {
-        return "DataPoint: [" + sid + " | " + timestamp + " | " + value + "]";
+        return "DataPoint: [" + this.sid + " | " + new java.sql.Timestamp(this.timestamp) + " | " + this.value + "]";
     }
 
     /** Instance Variables **/

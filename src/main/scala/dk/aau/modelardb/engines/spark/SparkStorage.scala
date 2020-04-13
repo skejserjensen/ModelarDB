@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,17 +14,18 @@
  */
 package dk.aau.modelardb.engines.spark
 
+import dk.aau.modelardb.core.Dimensions
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.{Row, SparkSession}
 
 trait SparkStorage {
-  //Open the connection to this Spark Storage
-  def open(ssb: SparkSession.Builder): SparkSession
+  //Opens a connection to storage with Apache Spark integration
+  def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession
 
-  //Write an RDD of segments to the underlying data source
+  //Writes an RDD of segments to the underlying data store
   def writeRDD(rdd: RDD[Row]): Unit
 
-  //Retrieve an RDD representing the underlying data source
+  //Retrieves an RDD of segments from the underlying data source
   def getRDD(filters: Array[Filter]): RDD[Row]
 }

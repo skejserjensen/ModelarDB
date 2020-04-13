@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,91 +14,98 @@
  */
 package dk.aau.modelardb.core.models;
 
+import dk.aau.modelardb.core.DataPoint;
+import dk.aau.modelardb.core.utility.CubeFunction;
+import dk.aau.modelardb.core.utility.Static;
+import org.apache.commons.lang.time.DateUtils;
+
 import java.io.Serializable;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-
-import dk.aau.modelardb.core.DataPoint;
-import dk.aau.modelardb.core.utility.Static;
 
 public abstract class Segment implements Serializable {
 
     /** Constructors **/
-    public Segment(int sid, long startTime, long endTime, int resolution, long[] gaps) {
+    public Segment(int sid, long startTime, long endTime, int resolution, int[] offsets) {
         this.sid = sid;
         this.startTime = startTime;
         this.endTime = endTime;
         this.resolution = resolution;
-        this.gaps = gaps;
+        this.offsets = offsets;
     }
 
-    public Segment(int sid, long startTime, long endTime, int resolution, byte[] gaps) {
+    public Segment(int sid, long startTime, long endTime, int resolution, byte[] offsets) {
         this.sid = sid;
         this.startTime = startTime;
         this.endTime = endTime;
         this.resolution = resolution;
-        this.gaps = Static.bytesToLongs(gaps);
+        this.offsets = Static.bytesToInts(offsets);
     }
 
     /** Public Methods **/
-    public abstract byte[] parameters();
+    public long getStartTime() {
+        return this.startTime;
+    }
 
-    public byte[] gaps() {
-        ByteBuffer gapBuffer = ByteBuffer.allocate(8 * this.gaps.length);
-        for (Long ts : gaps) {
-            gapBuffer.putLong(ts);
-        }
-        gapBuffer.flip();
-        return gapBuffer.array();
+    public long getEndTime() {
+        return this.endTime;
+    }
+
+    public String toString() {
+        return "Segment: [" + this.sid + " | " + new java.sql.Timestamp(this.startTime) + " | " + new java.sql.Timestamp(this.endTime) + " | " + this.resolution + " | " + this.getClass() + "]";
     }
 
     public int length() {
-        //The current system only support time series with static resolution and plus one makes length inclusive
-        int theoreticalSize = (int) ((this.endTime - this.startTime) / resolution) + 1;
-        int gapsSize = 0;
-        for (int i = 0; i < this.gaps.length - 1; i += 2) {
-            //One element is subtracted from the gap length to not include the last element
-            gapsSize += ((this.gaps[i + 1] - this.gaps[i]) / this.resolution) - 1;
-        }
-        return theoreticalSize - gapsSize;
+        //Computes the number of data points represented by this segment per time series
+        return (int) ((this.endTime - this.startTime) / this.resolution) + 1;
     }
 
-    public static long start(long fromTime, long startTime, long endTime, int resolution) {
+    public int capacity() {
+        //Computes the full length of the entire group even if the segment is restricted by a new start time
+        //Offsets is: [0] Group Offset, [1] Group Size, [2] Temporal Offset computed by Start()
+        int currentLength = this.offsets[1] * this.length();
+        if (this.offsets.length == 3) {
+            currentLength = this.offsets[2] + currentLength;
+        }
+        return currentLength;
+    }
+
+    public static long start(long newStartTime, long startTime, long endTime, int resolution, int[] offsets) {
         //The new start time is before the current start time, so no changes are performed
-        if (fromTime <= startTime || endTime < fromTime ) {
+        if (newStartTime <= startTime || endTime < newStartTime) {
             return startTime;
         }
 
         //The new start time is rounded up to match the sampling interval
-        long diff = (fromTime - startTime) % resolution;
-        return fromTime + (resolution - diff) - resolution;
+        long diff = (newStartTime - startTime) % resolution;
+        newStartTime = newStartTime + (resolution - diff) - resolution;
+        offsets[2] = offsets[2] + (int) ((newStartTime - startTime) / resolution);
+        return newStartTime;
     }
 
-    public static long end(long toTime, long startTime, long endTime, int resolution) {
-        //The new end time is after the current end time, so no changes are performed
-        if (toTime < startTime || endTime <= toTime) {
+    public static long end(long newEndTime, long startTime, long endTime, int resolution) {
+        //The new end time is later than the current end time, so no changes are performed
+        if (newEndTime < startTime || endTime <= newEndTime) {
             return endTime;
         }
 
         //The new end time is rounded down to match the sampling interval
-        long diff = (endTime - toTime) % resolution;
-        return toTime - (resolution - diff) + resolution;
+        long diff = (endTime - newEndTime) % resolution;
+        return newEndTime - (resolution - diff) + resolution;
     }
 
     public Stream<DataPoint> grid() {
-        if (this.gaps.length == 0) {
-            return gridNoGaps();
-        } else if (this.gaps.length == 1) {
-            return gridWithOffset();
-        } else {
-            return gridWithGaps();
-        }
-    }
+        //If the segment have been restricted by start time the data points should be returned from an offset
+        // Offsets store the following offsets: [0] Group Offset, [1] Group Size, [2] Temporal Offset computed by Start()
+        int groupOffset = this.offsets[0] - 1;
+        int groupSize = this.offsets[1];
+        int temporalOffset = this.offsets[2];
 
-    public String toString() {
-        return "Segment: [" + sid + " | " + startTime + " | " + endTime + " | " + resolution + "]";
+        return IntStream.range(0, this.length()).mapToObj(index -> {
+            long ts = this.startTime + (this.resolution * (long) index);
+            return new DataPoint(sid, ts, get(ts, (index + temporalOffset) * groupSize + groupOffset));
+        });
     }
 
     public float min() {
@@ -113,95 +120,67 @@ public abstract class Segment implements Serializable {
         return this.grid().mapToDouble(s -> s.value).sum();
     }
 
+    public double[] cube(Calendar calendar, int type, CubeFunction aggregator, double[] result) {
+        //The original start time and end time is stored so they can be restored at the end of the method
+        long originalStartTime = this.startTime;
+        long originalEndTime = this.endTime;
+        int originalOffset = this.offsets[2];
+
+        //Computes a new end time that is the end of the first interval of size type in the time dimension
+        calendar.setTimeInMillis(this.startTime);
+        calendar = DateUtils.ceiling(calendar, type);
+        this.endTime = calendar.getTimeInMillis() - this.resolution;
+        calendar.setTimeInMillis(this.startTime);
+        int field = calendar.get(type);
+
+        //If the new end time is after the original end time, the segment is shorter than that level in the time dimension
+        if (originalEndTime <= this.endTime) {
+            this.endTime = originalEndTime;
+            aggregator.aggregate(this, this.sid, field, result);
+            return result;
+        }
+
+        //For each time interval until the original end time the specified aggregate is computed and stored in result
+        calendar = DateUtils.ceiling(calendar, type);
+        while (this.endTime < originalEndTime) {
+            aggregator.aggregate(this, this.sid, field, result);
+
+            //Moves the start time and end time to delimit the next interval to compute the aggregate for
+            field = calendar.get(type);
+            long previousStartTime = this.startTime;
+            this.startTime = this.endTime + this.resolution;
+            this.offsets[2] = this.offsets[2] + (int) ((this.startTime - previousStartTime) / this.resolution);
+            calendar = DateUtils.ceiling(calendar, type);
+            this.endTime = calendar.getTimeInMillis() - this.resolution;
+        }
+
+        //The last time interval ends with the original end time
+        this.endTime = originalEndTime;
+        aggregator.aggregate(this, this.sid, field, result);
+        this.startTime = originalStartTime;
+        this.offsets[2] = originalOffset;
+        return result;
+    }
+
     /** Protected Methods **/
     protected abstract float get(long timestamp, int index);
 
-    protected int getIndexWithOffset() {
-        if (gaps.length % 2 != 0) {
-            return (int) gaps[gaps.length - 1];
-        } else {
-            return 0;
-        }
+    protected int getGroupOffset() {
+        return this.offsets[0] - 1;
     }
 
-    protected int capacity() {
-        if (this.gaps.length == 0) {
-            return (int) ((this.endTime - this.startTime) / resolution) + 1;
-        }
-
-        //Computes the total length of the time series even when it is restricted by a new start time or end time
-        int theoreticalLength = (int) ((this.endTime - this.startTime) / resolution) + 1;
-        int gapsLength = 0;
-        for (int i = 0; i < this.gaps.length - 1; i += 2) {
-            //One element is subtracted from the gap length to not include the last element
-            gapsLength += ((this.gaps[i + 1] - this.gaps[i]) / this.resolution) - 1;
-        }
-
-        //Extracts the offset if one is set to offset a possible new start time
-        int offset = 0;
-        if (this.gaps.length % 2 != 0) {
-            offset = (int) this.gaps[this.gaps.length - 1];
-        }
-        return theoreticalLength - gapsLength + offset;
+    protected int getGroupSize() {
+        return this.offsets[1];
     }
 
-    /** Private Methods **/
-    private Stream<DataPoint> gridNoGaps() {
-        //NOTE: This methods is optimized using the assumption that no gaps exist
-        int length = (int) ((this.endTime - this.startTime) / resolution) + 1;
-        return IntStream.range(0, length).mapToObj(index -> {
-            long ts = this.startTime + (this.resolution * (long) index);
-            return new DataPoint(sid, ts, get(ts, index));
-        });
-    }
-
-    private Stream<DataPoint> gridWithOffset() {
-        //NOTE: This methods is optimized using the assumption that only an offset exist
-        int offset = (int) this.gaps[this.gaps.length - 1];
-        int length = (int) ((this.endTime - this.startTime) / resolution) + 1;
-        return IntStream.range(offset, length + offset).mapToObj(index -> {
-            long ts = this.startTime + (this.resolution * (long) index);
-            return new DataPoint(sid, ts, get(ts, index));
-        });
-    }
-
-    private Stream<DataPoint> gridWithGaps() {
-        //NOTE: This methods is optimized using the assumption that only gaps exist
-        int currentGap = 0;
-        long gapsSize = 0;
-        long ts = this.startTime;
-        long runEnd = this.gaps[currentGap];
-        long runStart = this.gaps[currentGap + 1];
-        ArrayList<DataPoint> res = new ArrayList<>();
-
-        //Reconstruct all data points represented by the segment
-        while (ts <= this.endTime) {
-
-            //The loop creates new data points as runs between gaps
-            for (; ts <= runEnd; ts += this.resolution) {
-                int index = (int) ((ts - gapsSize - this.startTime) / this.resolution);
-                res.add(new DataPoint(sid, ts, get(ts, index)));
-            }
-            gapsSize += runStart - runEnd - this.resolution;
-            ts = runStart;
-            currentGap += 2;
-
-            //Runs must be executed until no more gaps exist and we can run until end time
-            if (currentGap < this.gaps.length) {
-                runEnd = this.gaps[currentGap];
-                runStart = this.gaps[currentGap + 1];
-            } else {
-                runEnd = this.endTime;
-                runStart = this.endTime + this.resolution;
-            }
-        }
-        return res.stream();
+    protected int getTemporalOffset() {
+        return this.offsets[2];
     }
 
     /** Instance Variables **/
     public final int sid;
-    public final long startTime;
-    public final long endTime;
     public final int resolution;
-    private final long[] gaps;
+    private long startTime;
+    private long endTime;
+    private final int[] offsets;
 }

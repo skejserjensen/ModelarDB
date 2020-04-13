@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,40 +16,36 @@ package dk.aau.modelardb.engines
 
 import java.util.function.Consumer
 
-import dk.aau.modelardb.core.Storage
 import dk.aau.modelardb.core.models.Segment
-import dk.aau.modelardb.Main
-
-import scala.collection.immutable.HashMap
+import dk.aau.modelardb.core.utility.SegmentFunction
+import dk.aau.modelardb.core.{Configuration, Partitioner, SegmentGroup, Storage}
 
 object EngineFactory {
 
   /** Public Methods **/
-  def startEngine(interface: String, engine: String, storage: Storage, models: Array[String],
-                  batchSize: Int, settings: HashMap[String, List[String]]): Unit = {
+  def startEngine(interface: String, engine: String, storage: Storage, models: Array[String], batchSize: Int): Unit = {
 
-
-    //Grabs the name of the system from the engine connection string
+    //Extracts the name of the system from the engine connection string
     engine.takeWhile(_ != ':') match {
       case "local" => startLocal(storage, models, batchSize)
-      case "spark" => startSpark(interface, engine, storage, models, batchSize, settings)
+      case "spark" => startSpark(interface, engine, storage, models, batchSize)
       case _ =>
-        throw new java.lang.UnsupportedOperationException("unknown value for modelardb.engine in the config file")
+        throw new java.lang.UnsupportedOperationException("ModelarDB: unknown value for modelardb.engine in the config file")
     }
   }
 
   /** Private Methods **/
   private def startLocal(storage: Storage, models: Array[String], batchSize: Int): Unit = {
-    //Wraps the insert method for emitting both segment types to the stream
-    val consumeTemporary = new java.util.function.Consumer[Segment] {
-      override def accept(segment: Segment): Unit = ()
+    //Creates methods that drop temporary segments and store finalized segments in batches
+    val consumeTemporary = new SegmentFunction {
+      override def emit(gid: Int, startTime: Long, endTime: Long, mid: Int, parameters: Array[Byte], gaps: Array[Byte]): Unit = ()
     }
 
     var batchIndex = 0
-    val batch = new Array[Segment](batchSize)
-    val consumeFinalized = new java.util.function.Consumer[Segment] {
-      override def accept(segment: Segment): Unit = {
-        batch(batchIndex) = segment
+    val batch = new Array[SegmentGroup](batchSize)
+    val consumeFinalized = new SegmentFunction {
+      override def emit(gid: Int, startTime: Long, endTime: Long, mid: Int, parameters: Array[Byte], gaps: Array[Byte]): Unit = {
+        batch(batchIndex) = new SegmentGroup(gid, startTime, endTime, mid, parameters, gaps)
         batchIndex += 1
         if (batchIndex == batchSize) {
           storage.insert(batch, batchIndex)
@@ -62,14 +58,19 @@ object EngineFactory {
       override def getAsBoolean: Boolean = false
     }
 
-    storage.open()
-    val timeSeries = Main.initTimeSeries(storage.getMaxSID)
-    storage.init(timeSeries, models)
-    val workingSets = Main.buildWorkingSets(timeSeries, 1).toArray
+    val configuration = Configuration.get()
+    val dimensions = configuration.getDimensions
+    storage.open(dimensions)
 
-    //There should only be one working set so we verify and throw if we due to an error get more
+    val timeSeries = Partitioner.initializeTimeSeries(configuration, storage.getMaxSID)
+    val timeSeriesGroups = Partitioner.groupTimeSeries(configuration, timeSeries, storage.getMaxGID)
+    storage.initialize(timeSeriesGroups, dimensions, models)
+
+    val midCache = storage.getMidCache
+    val workingSets = Partitioner.partitionTimeSeries(configuration, timeSeriesGroups, midCache, 1)
+
     if (workingSets.length != 1) {
-      throw new java.lang.RuntimeException("local engine received multiple workings sets instead of one")
+      throw new java.lang.RuntimeException("ModelarDB: the local engine did no receive exactly one working set")
     }
     val workingSet = workingSets(0)
     println(workingSet)
@@ -77,28 +78,38 @@ object EngineFactory {
     storage.insert(batch, batchIndex)
     workingSet.logger.printWorkingSetResult()
 
-    //DEBUG: For debugging we print the number of data points returned from storage
+    //DEBUG: for debugging we print the number of data points returned from storage
     var segmentDebugCount = 0L
-    storage.getSegments.forEach(new Consumer[Segment] {
-      override def accept(segment: Segment): Unit = segmentDebugCount += segment.grid().count()
+    storage.getSegments.forEach(new Consumer[SegmentGroup] {
+      override def accept(sg: SegmentGroup): Unit = {
+        val segments = sg.toSegments(storage)
+        for (segment: Segment <- segments) {
+          segmentDebugCount += segment.grid().count()
+        }
+      }
     })
     println(
       s"Gridded: $segmentDebugCount\n=========================================================")
   }
 
-  private def startSpark(interface: String, engine: String, storage: Storage, models: Array[String],
-                         batchSize: Int, settings: HashMap[String, List[String]]): Unit = {
-    //Read spark specific configuration variables
-    val receiverCount = settings("modelardb.spark.receivers").head.toInt
+  private def startSpark(interface: String, engine: String, storage: Storage,
+                         models: Array[String], segmentBatchSize: Int): Unit = {
+
+    //Checks the Apache Spark specific configuration parameters
+    val configuration = Configuration.get()
+    val receiverCount = configuration.getInteger("modelardb.spark.receivers")
     if (receiverCount < 0) {
-      throw new java.lang.UnsupportedOperationException("modelardb.spark.receiver must be a positive number of receivers or zero to disable")
+      throw new java.lang.UnsupportedOperationException("ModelarDB: modelardb.spark.receiver must be a positive number of receivers or zero to disable")
     }
 
-    val microBatchSize = settings("modelardb.spark.streaming").head.toInt
+    val microBatchSize = configuration.getInteger("modelardb.spark.streaming")
     if (microBatchSize <= 0) {
-      throw new java.lang.UnsupportedOperationException("modelardb.spark.streaming must be a positive number of seconds between micro-batches")
+      throw new java.lang.UnsupportedOperationException("ModelarDB: modelardb.spark.streaming must be a positive number of seconds between micro-batches")
     }
 
-    new dk.aau.modelardb.engines.spark.Spark(interface, engine, storage, models, receiverCount, microBatchSize, batchSize).start()
+    val dimensions = configuration.getDimensions
+    new dk.aau.modelardb.engines.spark.Spark(
+      interface, engine, storage, dimensions, models,
+      receiverCount, microBatchSize, segmentBatchSize).start()
   }
 }

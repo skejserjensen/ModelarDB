@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,68 +14,48 @@
  */
 package dk.aau.modelardb.core.models;
 
+import dk.aau.modelardb.core.DataPoint;
+import dk.aau.modelardb.core.utility.Static;
+
 import java.io.Serializable;
 import java.util.List;
-
-import dk.aau.modelardb.core.DataPoint;
 
 public abstract class Model implements Serializable {
 
     /** Constructors **/
-    public Model(Class<? extends Segment> segmentType, float error, int limit) {
+    public Model(int mid, float error, int limit) {
+        this.mid = mid;
         this.error = error;
         this.limit = limit;
-        this.segment = segmentType;
     }
 
     /** Public Methods **/
-    abstract public boolean append(DataPoint currentDataPoint);
-    abstract public void initialize(List<DataPoint> currentSegment);
-    abstract public Segment get(int sid, long startTime, long endTime, int resolution,
-                                List<DataPoint> currentSegment, long[] gaps);
-    abstract public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps);
+    abstract public boolean append(DataPoint[] currentDataPoints);
+    abstract public void initialize(List<DataPoint[]> currentSegment);
+    abstract public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> dps);
+    abstract public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets);
     abstract public int length();
-    abstract public float size();
+    abstract public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps);
 
-    final public float compressionRatio() {
+    final public float compressionRatio(long startTime, long endTime, int resolution, List<DataPoint[]> dps, int gaps) {
         //   DPs sid: int, ts: long, v: float
-        // model sid: int, start_time: long, end_time: long, mid: int, arguments: bytes[]
-        //4 + 8 + 4 = 16 * data points is reduced to 4 + 8 + 8 + 4 + sizeof parameters
-        return (16.0F * this.length()) / (24.0F + this.size());
+        // model sid: int, start_time: long, end_time: long, mid: int, parameters: bytes[], gaps: bytes[]
+        //4 + 8 + 4 = 16 * data points is reduced to 4 + 8 + 8 + 4 + sizeof parameters + sizeof gaps
+        return (16.0F * this.length()) / (24.0F + this.size(startTime, endTime, resolution, dps) + (4.0F * gaps));
+    }
+
+    final public float unsafeSize() {
+        //Computes the size but does not provide the model with the information necessary for the model to verify its precision
+        return this.size(0L, 0L, 0, new java.util.ArrayList<>());
     }
 
     /** Protected Methods **/
-    final protected boolean outsideErrorBound(double approximation, double real) {
-        return percentageError(approximation, real) > this.error;
-    }
-
-    final protected double percentageError(double approximation, double real) {
-        //Necessary if approximate and real are 0.0 as the division would return NaN instead of Infinity
-        if (approximation == real) {
-            return 0.0;
-        }
-
-        double difference = real - approximation;
-        double result = Math.abs(difference / real);
-        return result * 100.0;
-    }
-
-    final protected double percentageDifference(double a, double b) {
-        //Necessary if approximate and difference are 0.0 as the division would return NaN instead of Infinity
-        if (a == b) {
-            return 0.0;
-        }
-
-        //Computes the difference between the two values in percentage, as both the
-        //average or difference can be negative the absolute value is computed last
-        double average = (a + b) / 2.0;
-        double difference = a - b;
-        double result = Math.abs(difference / average);
-        return result * 100.0;
+    final protected boolean outsidePercentageErrorBound(double approximation, double real) {
+        return Static.percentageError(approximation, real) > this.error;
     }
 
     /** Instance Variables **/
+    public final int mid;
     public final float error;
     public final int limit;
-    public final Class<? extends Segment> segment;
 }

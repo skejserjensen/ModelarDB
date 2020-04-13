@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,18 @@
  */
 package dk.aau.modelardb.core.models;
 
-import java.util.List;
-
 import dk.aau.modelardb.core.DataPoint;
 import dk.aau.modelardb.core.utility.BitBuffer;
+
+import java.util.List;
 
 // The implementation of this model is based on code published by Michael Burman
 // under the Apache2 license. LINK: https://github.com/burmanm/gorilla-tsc
 class FacebookGorillaModel extends Model {
 
     /** Constructor **/
-    FacebookGorillaModel(float error, int limit) {
-        super(FacebookGorillaSegment.class, error, limit);
+    FacebookGorillaModel(int mid, float error, int limit) {
+        super(mid, error, limit);
         this.currentSize = 0;
         this.compressed = null;
         this.storedLeadingZeros = Integer.MAX_VALUE;
@@ -34,44 +34,47 @@ class FacebookGorillaModel extends Model {
 
     /** Public Methods **/
     @Override
-    public boolean append(DataPoint currentDataPoint) {
+    public boolean append(DataPoint[] currentDataPoints) {
         if (this.currentSize == this.limit) {
             return false;
         }
 
         if (this.currentSize == 0) {
-            this.lastVal = Float.floatToIntBits(currentDataPoint.value);
+            this.lastVal = Float.floatToIntBits(currentDataPoints[0].value);
             this.compressed.writeBits(lastVal, java.lang.Integer.SIZE);
+            for (int i = 1; i < currentDataPoints.length; i++) {
+                compress(currentDataPoints[i].value);
+            }
         } else {
-            compress(currentDataPoint.value);
+            for (DataPoint dp : currentDataPoints) {
+                compress(dp.value);
+            }
         }
         this.currentSize += 1;
         return true;
     }
 
     @Override
-    public void initialize(List<DataPoint> currentSegment) {
+    public void initialize(List<DataPoint[]> currentSegment) {
         this.currentSize = 0;
-        this.compressed = new BitBuffer();
+        this.compressed = new BitBuffer(4 * this.limit);
         this.storedLeadingZeros = Integer.MAX_VALUE;
         this.storedTrailingZeros = 0;
 
-        for(DataPoint dataPoint : currentSegment) {
-            this.append(dataPoint);
+        for(DataPoint[] dataPoints : currentSegment) {
+            this.append(dataPoints);
         }
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, List<DataPoint> currentSegment, long[] gaps) {
-        return new FacebookGorillaSegment(sid, startTime, endTime, resolution,  this.compressed.array(), gaps);
-
+    public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> currentSegment) {
+        return this.compressed.array();
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps) {
-        return new FacebookGorillaSegment(sid, startTime, endTime, resolution, parameters, gaps);
+    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+        return new FacebookGorillaSegment(sid, startTime, endTime, resolution, parameters, offsets);
     }
-
 
     @Override
     public int length() {
@@ -79,19 +82,23 @@ class FacebookGorillaModel extends Model {
     }
 
     @Override
-    public float size() {
-        return this.compressed.size();
+    public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+        if (this.currentSize == 0) {
+            return Float.NaN;
+        } else {
+            return this.compressed.size();
+        }
     }
 
     /** Private Methods **/
     private void compress(float value) {
         int curVal = Float.floatToIntBits(value);
-        int xor = curVal ^ lastVal;
+        int xor = curVal ^ this.lastVal;
 
         if (xor == 0) {
-            compressed.writeBit(false);
+            this.compressed.writeBit(false);
         } else {
-            //Compute the number of leading and trailing zeros that it might be necessary to store
+            //Computes the number of leading and trailing zeros that it might be necessary to store
             int leadingZeros = Integer.numberOfLeadingZeros(xor);
             int trailingZeros = Integer.numberOfTrailingZeros(xor);
 
@@ -101,27 +108,27 @@ class FacebookGorillaModel extends Model {
             this.compressed.writeBit(true);
 
             if (leadingZeros >= this.storedLeadingZeros && trailingZeros >= this.storedTrailingZeros) {
-                //Write only the significant bits
+                //Stores only the significant bits
                 this.compressed.writeBit(false);
-                int significantBits = 32 - storedLeadingZeros - storedTrailingZeros;
-                this.compressed.writeBits(xor >>> storedTrailingZeros, significantBits);
+                int significantBits = 32 - this.storedLeadingZeros - this.storedTrailingZeros;
+                this.compressed.writeBits(xor >>> this.storedTrailingZeros, significantBits);
             } else {
-                //Store a new number of leading zero bits before the significant bits
+                //Stores a new number of leading zero bits before the significant bits
                 this.compressed.writeBit(true);
-                this.compressed.writeBits(leadingZeros, 5); // Number of leading zeros in the next 5 bits
+                this.compressed.writeBits(leadingZeros, 5);
 
                 int significantBits = 32 - leadingZeros - trailingZeros;
-                this.compressed.writeBits(significantBits, 6); // Length of meaningful bits in the next 6 bits
-                this.compressed.writeBits(xor >>> trailingZeros, significantBits); // Store the meaningful bits of XOR
+                this.compressed.writeBits(significantBits, 6);
+                this.compressed.writeBits(xor >>> trailingZeros, significantBits);
 
                 this.storedLeadingZeros = leadingZeros;
                 this.storedTrailingZeros = trailingZeros;
             }
         }
-        lastVal = curVal;
+        this.lastVal = curVal;
     }
 
-    /** Instance Variable **/
+    /** Instance Variables **/
     private BitBuffer compressed;
     private int lastVal;
     private int currentSize;
@@ -133,32 +140,20 @@ class FacebookGorillaModel extends Model {
 class FacebookGorillaSegment extends Segment {
 
     /** Constructor **/
-    FacebookGorillaSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, long[] gaps) {
-        super(sid, startTime, endTime, resolution, gaps);
-        this.compressedValues = parameters;
-        this.values = decompress(parameters, super.length());
-    }
-
-    FacebookGorillaSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps) {
-        //Total size is used as the segment must be guaranteed to get the total number of data points it represents
-        super(sid, startTime, endTime, resolution, gaps);
-        this.compressedValues = parameters;
+    FacebookGorillaSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+        //Capacity is used as the segment must be guaranteed to get the total number of data points it represent
+        super(sid, startTime, endTime, resolution, offsets);
         this.values = decompress(parameters, super.capacity());
     }
 
     /** Public Methods **/
     @Override
-    public byte[] parameters() {
-        if (this.compressedValues == null){
-            throw new UnsupportedOperationException("parameters are not currently stored");
-        }
-        return compressedValues;
-    }
-
-    @Override
     public float min() {
         float min = Float.MAX_VALUE;
-        for (int index = getIndexWithOffset(); index < this.values.length; index++) {
+        int inc = getGroupSize();
+        int init = inc * getTemporalOffset() + getGroupOffset();
+        int length = init + inc * this.length();
+        for (int index = init; index < length; index += inc) {
             min = Float.min(min, this.values[index]);
         }
         return min;
@@ -167,7 +162,10 @@ class FacebookGorillaSegment extends Segment {
     @Override
     public float max() {
         float max = -Float.MAX_VALUE;
-        for (int index = getIndexWithOffset(); index < this.values.length; index++) {
+        int inc = getGroupSize();
+        int init = inc * getTemporalOffset() + getGroupOffset();
+        int length = init + inc * this.length();
+        for (int index = init; index < length; index += inc) {
             max = Float.max(max, this.values[index]);
         }
         return max;
@@ -176,7 +174,10 @@ class FacebookGorillaSegment extends Segment {
     @Override
     public double sum() {
         double acc = 0;
-        for (int index = getIndexWithOffset(); index < this.values.length; index++) {
+        int inc = getGroupSize();
+        int init = inc * getTemporalOffset() + getGroupOffset();
+        int length = init + inc * this.length();
+        for (int index = init; index < length; index += inc) {
             acc += this.values[index];
         }
         return acc;
@@ -189,8 +190,8 @@ class FacebookGorillaSegment extends Segment {
     }
 
     /** Private Methods **/
-    private float[] decompress(byte[] values, int size) {
-        float[] result = new float[size];
+    private float[] decompress(byte[] values, int length) {
+        float[] result = new float[length];
         BitBuffer bitBuffer = new BitBuffer(values);
 
         int storedLeadingZeros = Integer.MAX_VALUE;
@@ -198,7 +199,7 @@ class FacebookGorillaSegment extends Segment {
         int lastVal = bitBuffer.getInt(java.lang.Integer.SIZE);
         result[0] = Float.intBitsToFloat(lastVal);
 
-        for (int i = 1; i < size; i++) {
+        for (int i = 1; i < length; i++) {
             if (bitBuffer.readBit()) {
                 if (bitBuffer.readBit()) {
                     // New leading and trailing zeros
@@ -223,6 +224,5 @@ class FacebookGorillaSegment extends Segment {
     }
 
     /** Instance Variables **/
-    private float[] values;
-    private byte[] compressedValues;
+    private final float[] values;
 }

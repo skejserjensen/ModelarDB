@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,8 +25,8 @@ import java.util.Arrays;
 public class BitBuffer {
 
     /** Constructors **/
-    public BitBuffer() {
-        this.byteBuffer = ByteBuffer.allocate(4096);
+    public BitBuffer(int size) {
+        this.byteBuffer = ByteBuffer.allocate(size);
         this.currentByte = this.byteBuffer.get(this.byteBuffer.position());
         this.bitsLeft = Byte.SIZE;
     }
@@ -86,7 +86,7 @@ public class BitBuffer {
         int value = 0;
         while (bits > 0) {
             if (bits > this.bitsLeft || bits == Byte.SIZE) {
-                //Take only the bitsLeft "least significant" bits
+                //Take only the bitsLeft least significant bits
                 byte d = (byte) (this.currentByte & ((1 << this.bitsLeft) - 1));
                 value = (value << this.bitsLeft) + (d & 0xFF);
                 bits -= this.bitsLeft;
@@ -131,7 +131,7 @@ public class BitBuffer {
     /** Private Methods **/
     private void allocateNewByte() {
         this.byteBuffer.put(this.currentByte);
-        if (!this.byteBuffer.hasRemaining()) {
+        if ( ! this.byteBuffer.hasRemaining()) {
             expandAllocation();
         }
         this.currentByte = this.byteBuffer.get(this.byteBuffer.position());
@@ -153,7 +153,7 @@ public class BitBuffer {
         this.byteBuffer = expandedByteBuffer;
     }
 
-    /** Instance Variable **/
+    /** Instance Variables **/
     private int bitsLeft;
     private byte currentByte;
     private ByteBuffer byteBuffer;

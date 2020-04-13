@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,68 +14,76 @@
  */
 package dk.aau.modelardb.core.models;
 
+import dk.aau.modelardb.core.DataPoint;
+
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import dk.aau.modelardb.core.DataPoint;
-
-class PMC_MRModel extends Model {
+class PMC_MeanModel extends Model {
 
     /** Constructors **/
-    PMC_MRModel(float error, int limit) {
-        super(PMC_MRSegment.class, error, limit);
+    PMC_MeanModel(int mid, float error, int limit) {
+        super(mid, error, limit);
         this.currentSize = 0;
         this.min = Float.MAX_VALUE;
         this.max = -Float.MAX_VALUE;
+        this.sum = 0.0F;
         this.withinErrorBound = true;
     }
 
     /** Public Methods **/
     @Override
-    public boolean append(DataPoint currentDataPoint) {
+    public boolean append(DataPoint[] currentDataPoints) {
         if ( ! this.withinErrorBound) {
             return false;
         }
 
-        float value = currentDataPoint.value;
-        float nextMin = (this.min > value) ? value : this.min;
-        float nextMax = (this.max < value) ? value : this.max;
+        //The model can represent all data points if the average value is within error bound of the min and max values
+        float nextMin = this.min;
+        float nextMax = this.max;
+        float nextSum = this.sum;
+        for (DataPoint cdp : currentDataPoints) {
+            float value = cdp.value;
+            nextSum += value;
+            nextMin = Math.min(nextMin, value);
+            nextMax = Math.max(nextMax, value);
+        }
 
-        double approximation = (nextMax + nextMin) / 2;
-        if (outsideErrorBound(approximation, nextMin) || outsideErrorBound(approximation, nextMax)) {
+        float average = nextSum / ((this.currentSize + 1) * currentDataPoints.length);
+        if (outsidePercentageErrorBound(average, nextMin) || outsidePercentageErrorBound(average, nextMax)) {
             this.withinErrorBound = false;
             return false;
         }
-
         this.min = nextMin;
         this.max = nextMax;
+        this.sum = nextSum;
         this.currentSize += 1;
         return true;
     }
 
     @Override
-    public void initialize(List<DataPoint> currentSegment) {
+    public void initialize(List<DataPoint[]> currentSegment) {
+        this.sum = 0.0F;
         this.currentSize = 0;
         this.min = Float.MAX_VALUE;
         this.max = -Float.MAX_VALUE;
         this.withinErrorBound = true;
 
-        for (DataPoint DataPoint : currentSegment) {
-            if ( ! append(DataPoint)) {
+        for (DataPoint[] dataPoints : currentSegment) {
+            if ( ! append(dataPoints)) {
                 return;
             }
         }
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution,
-                       List<DataPoint> currentSegment, long[] gaps) {
-        return new PMC_MRSegment(sid, startTime, endTime, resolution, (min + max) / 2.0F, gaps);
+    public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+        return ByteBuffer.allocate(4).putFloat(sum / (currentSize * dps.get(0).length)).array();
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps) {
-        return new PMC_MRSegment(sid, startTime, endTime, resolution, parameters, gaps);
+    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+        return new PMC_MeanSegment(sid, startTime, endTime, resolution, parameters, offsets);
     }
 
     @Override
@@ -84,38 +92,33 @@ class PMC_MRModel extends Model {
     }
 
     @Override
-    public float size() {
-        //The segment is represented as a single float which is 4 bytes
-        return 4.0F;
+    public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+        if (this.currentSize == 0) {
+            return Float.NaN;
+        } else {
+            //The segment is represented as a single float which is 4 bytes
+            return 4.0F;
+        }
     }
 
     /** Instance Variables **/
     private int currentSize;
     private float min;
     private float max;
+    private float sum;
     private boolean withinErrorBound;
 }
 
 
-class PMC_MRSegment extends Segment {
+class PMC_MeanSegment extends Segment {
 
     /** Constructors **/
-    PMC_MRSegment(int sid, long startTime, long endTime, int resolution, float value, long[] gaps) {
-        super(sid, startTime, endTime, resolution, gaps);
-        this.value = value;
-    }
-
-    PMC_MRSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] gaps) {
-        super(sid, startTime, endTime, resolution, gaps);
+    PMC_MeanSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+        super(sid, startTime, endTime, resolution, offsets);
         this.value = ByteBuffer.wrap(parameters).getFloat();
     }
 
     /** Public Methods **/
-    @Override
-    public byte[] parameters() {
-        return ByteBuffer.allocate(4).putFloat(this.value).array();
-    }
-
     @Override
     public float min() {
         return this.value;

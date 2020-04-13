@@ -1,4 +1,4 @@
-/* Copyright 2018 Aalborg University
+/* Copyright 2018-2019 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,30 +37,28 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
     public TimeSeries(String stringPath, int sid, int resolution,
                       String splitString, boolean hasHeader,
                       int timestampColumn, String dateFormat, String timeZone,
-                      int valueColumn, String locale) throws IOException {
+                      int valueColumn, String locale) {
 
-        //Values set in the constructor to allow the fields to be final and exported as public
-        this.location = stringPath.substring(stringPath.lastIndexOf('/') + 1);
+        //Values are set in the constructor to allow the fields to be final and exported as public
+        this.source = stringPath.substring(stringPath.lastIndexOf('/') + 1);
         this.sid = sid;
         this.resolution = resolution;
         this.isBounded = true;
-        this.init = (Runnable & Serializable) () -> initFileChannel(stringPath);
+        this.initialize = (Runnable & Serializable) () -> initFileChannel(stringPath);
         setSerializable(splitString, hasHeader, timestampColumn, dateFormat, timeZone, valueColumn, locale);
     }
 
     //Socket
-    public TimeSeries(String host, int port, int sid, int resolution,
-                      String splitString, boolean hasHeader,
-                      int timestampColumn, String dateFormat, String timeZone,
-                      int valueColumn, String locale) throws IOException {
+    public TimeSeries(String host, int port, int sid, int resolution, String splitString, int timestampColumn,
+                      String dateFormat, String timeZone, int valueColumn, String locale) {
 
         //Values are set in the constructor to allow the fields to be final and exported as public
-        this.location = host + " : " + port;
+        this.source = host + " : " + port;
         this.sid = sid;
         this.resolution = resolution;
         this.isBounded = false;
-        this.init = (Runnable & Serializable) () -> initSocketChannel(host, port);
-        setSerializable(splitString, hasHeader, timestampColumn, dateFormat, timeZone, valueColumn, locale);
+        this.initialize = (Runnable & Serializable) () -> initSocketChannel(host, port);
+        setSerializable(splitString, false, timestampColumn, dateFormat, timeZone, valueColumn, locale);
     }
 
     /** Public Methods **/
@@ -96,13 +94,21 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
 
         try {
             this.channel.close();
-            //Clear all reference to channels and buffers to enable garbage collection
+            //Clears all references to channels and buffers to enable garbage collection
             this.byteBuffer = null;
             this.nextBuffer = null;
             this.channel = null;
         } catch (IOException ioe) {
             throw new java.lang.RuntimeException(ioe);
         }
+    }
+
+    public void setScalingFactor(float scalingFactor) {
+        this.scalingFactor = scalingFactor;
+    }
+
+    public float getScalingFactor() {
+        return this.scalingFactor;
     }
 
     public void attachToSelector(Selector s, SegmentGenerator mg) throws IOException {
@@ -112,7 +118,7 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
     }
 
     public String toString() {
-        return "Time Series: [" + sid + " | " + location + " | " + resolution + "]";
+        return "Time Series: [" + this.sid + " | " + this.source + " | " + this.resolution + "]";
     }
 
     /** Private Methods **/
@@ -120,25 +126,26 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
         try {
             FileChannel fc = FileChannel.open(Paths.get(stringPath));
 
-            //Adding an additional layer of stream if data must be uncompressed
+            //Wraps the channel in a stream if the data is compressed
             String suffix = "";
             int lastIndexOfDot = stringPath.lastIndexOf('.');
             if (lastIndexOfDot > -1) {
                 suffix = stringPath.substring(lastIndexOfDot);
             }
-            switch (suffix) {
-                case ".gz":
-                    InputStream is = Channels.newInputStream(fc);
-                    GZIPInputStream gis = new GZIPInputStream(is);
-                    this.channel = Channels.newChannel(gis);
-                    break;
-                default:
-                    this.channel = fc;
-                    break;
+
+            if (".gz".equals(suffix)) {
+                InputStream is = Channels.newInputStream(fc);
+                GZIPInputStream gis = new GZIPInputStream(is);
+                this.channel = Channels.newChannel(gis);
+            } else {
+                this.channel = fc;
             }
             this.byteBuffer = ByteBuffer.allocate(this.bufferSize);
+            if (this.hasHeader) {
+                readLines();
+            }
         } catch (IOException ioe) {
-            //An unchecked exception is used here to allow for the function to be used in a lambda
+            //An unchecked exception is used so the function can be called in a lambda function
             throw new RuntimeException(ioe);
         }
     }
@@ -148,55 +155,59 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
             this.channel = SocketChannel.open(new InetSocketAddress(host, port));
             this.byteBuffer = ByteBuffer.allocate(this.bufferSize);
         } catch (IOException ioe) {
-            //An unchecked exception is used here to allow for the function to be used in a lambda
+            //An unchecked exception is used so the function can be called in a lambda function
             throw new RuntimeException(ioe);
         }
     }
 
     private void setSerializable(String splitString, boolean hasHeader,
                                  int timestampColumn, String dateFormat, String timeZone,
-                                 int valueColumn, String localeString) throws java.io.IOException {
-        //Initializes a line buffer with an arbitrarily chosen size as BufferedReaders 8192 is unnecessary for (ts, v) pairs
+                                 int valueColumn, String localeString) {
+        //A small buffer is used so more time series can be ingested in parallel
         this.bufferSize = 1024;
-
+        this.hasHeader = hasHeader;
         this.splitString = splitString;
-        if (hasHeader) {
-            readLines();
-        }
+        this.scalingFactor = 1.0F;
 
         this.timestampColumn = timestampColumn;
         switch (dateFormat) {
-        case "unix":
-            this.dateParserType = 1;
-            break;
-        case "java":
-            this.dateParserType = 2;
-            break;
-        default:
-            this.dateParserType = 3;
-            this.dateParser = new SimpleDateFormat(dateFormat);
-            this.dateParser.setTimeZone(java.util.TimeZone.getTimeZone(timeZone));
-            this.dateParser.setLenient(false);
-            break;
+            case "unix":
+                this.dateParserType = 1;
+                break;
+            case "java":
+                this.dateParserType = 2;
+                break;
+            default:
+                this.dateParserType = 3;
+                this.dateParser = new SimpleDateFormat(dateFormat);
+                this.dateParser.setTimeZone(java.util.TimeZone.getTimeZone(timeZone));
+                this.dateParser.setLenient(false);
+                break;
         }
 
         this.valueColumn = valueColumn;
         Locale locale = new Locale(localeString);
         this.valueParser = NumberFormat.getInstance(locale);
+        this.decodeBuffer = new StringBuffer();
         this.nextBuffer = new StringBuffer();
     }
 
     private void readLines() throws IOException {
         int lastChar = 0;
 
-        //Read a whole line from the channel by looking for either a new line or if no additional bytes are returned
+        //Reads a whole line from the channel by looking for either a new line or if no additional bytes are returned
         do {
             this.byteBuffer.clear();
             this.channel.read(this.byteBuffer);
             lastChar = this.byteBuffer.position();
             this.byteBuffer.flip();
-            this.nextBuffer.append(Charset.forName("UTF-8").decode(this.byteBuffer));
-        } while (lastChar != 0 && this.byteBuffer.get(lastChar - 1) != '\n');
+            this.decodeBuffer.append(Charset.forName("UTF-8").decode(this.byteBuffer));
+        } while (lastChar != 0 && this.decodeBuffer.indexOf("\n") == -1);
+
+        //Transfer all fully read data points into a new buffer to simplify the remaining implementation
+        int lastFullyParsedDataPoint = this.decodeBuffer.lastIndexOf("\n") + 1;
+        this.nextBuffer.append(this.decodeBuffer, 0, lastFullyParsedDataPoint);
+        this.decodeBuffer.delete(0, lastFullyParsedDataPoint);
     }
 
     private DataPoint nextDataPoint() throws IOException {
@@ -211,40 +222,43 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
                 this.nextBuffer.delete(0, nextDataPointIndex);
             }
 
-            //Parse the timestamp column as either Unix time, java time or a human readable timestamp
+            //Parses the timestamp column as either Unix time, Java time, or as a human readable timestamp
             long timestamp = 0;
             switch (this.dateParserType) {
-            case 1:
-                //Unix Time
-                timestamp = new Date(Long.valueOf(split[timestampColumn]) * 1000).getTime();
-                break;
-            case 2:
-                //Java Time
-                timestamp = new Date(Long.valueOf(split[timestampColumn])).getTime();
-                break;
-            case 3:
-                //String Time
-                timestamp = dateParser.parse(split[timestampColumn]).getTime();
-                break;
+                case 1:
+                    //Unix time
+                    timestamp = new Date(Long.valueOf(split[timestampColumn]) * 1000).getTime();
+                    break;
+                case 2:
+                    //Java time
+                    timestamp = new Date(Long.valueOf(split[timestampColumn])).getTime();
+                    break;
+                case 3:
+                    //Human readable timestamp
+                    timestamp = dateParser.parse(split[timestampColumn]).getTime();
+                    break;
             }
             float value = valueParser.parse(split[valueColumn]).floatValue();
-            return new DataPoint(this.sid, timestamp, value);
+            return new DataPoint(this.sid, timestamp, this.scalingFactor * value);
         } catch (ParseException pe) {
-            //If the input cannot be parsed we interpret it as the stream of data points ending
+            //If the input cannot be parsed the stream is considered empty
             this.channel.close();
-            return null;
+            throw new java.lang.RuntimeException(pe);
         }
     }
 
     /** Instance Variables **/
-    public final String location;
+    public final String source;
     public final int sid;
     public final int resolution;
     public final boolean isBounded;
-    public final Runnable init;
+    public final Runnable initialize;
 
+    private boolean hasHeader;
+    private float scalingFactor;
     private int bufferSize;
     private ByteBuffer byteBuffer;
+    private StringBuffer decodeBuffer;
     private StringBuffer nextBuffer;
     private ReadableByteChannel channel;
     private String splitString;
