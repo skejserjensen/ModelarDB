@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ class ViewProvider extends RelationProvider {
 
   /** Public Methods **/
   override def createRelation(sqlContext: SQLContext, parameters: Map[String, String]): BaseRelation = {
-    //Retrieves the names and types of the dimensional columns
+    //Retrieves the names and types of the denormalized dimensions columns
     val columns = Spark.getStorage.getDimensions.getColumns
     val types = Spark.getStorage.getDimensions.getTypes
 
@@ -36,7 +36,7 @@ class ViewProvider extends RelationProvider {
       case (name, Types.TEXT) => StructField(name, StringType, nullable = false)
     }
 
-    //Construct the requested view
+    //Constructs the requested view
     parameters("type") match {
       case "Segment" => new ViewSegment(dimensions)(sqlContext)
       case "DataPoint" => new ViewDataPoint(dimensions)(sqlContext)

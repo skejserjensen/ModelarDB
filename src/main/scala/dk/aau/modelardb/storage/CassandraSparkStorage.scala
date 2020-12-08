@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ import scala.collection.JavaConverters._
 
 class CassandraSparkStorage(connectionString: String) extends Storage with SparkStorage {
 
-  /* Public Methods */
+  /** Public Methods **/
   override def open(dimensions: Dimensions): Unit = {
     val (host, user, pass) = parseConnectionString(connectionString)
     this.connector = CassandraConnector(new SparkConf()
@@ -57,7 +57,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
   override def initialize(timeSeriesGroups: Array[TimeSeriesGroup], dimensions: Dimensions, modelNames: Array[String]): Unit = {
     val session = this.connector.openSession()
 
-    //Gaps are encoded using 64 bits integers so groups must be at most 64 time series
+    //Gaps are encoded using 64 bits integers so groups cannot consist of more than 64 time series
     if (timeSeriesGroups.nonEmpty && timeSeriesGroups.map(tsg => tsg.size()).max > 64) {
       throw new IllegalArgumentException("ModelarDB: CassandraSparkStorage groups must be less than 64 time series")
     }
@@ -103,7 +103,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
       sourcesInStorage.put(sid, metadata.toArray)
     }
 
-    //Extracts all model names from storage
+    //Extracts the name of all models in storage
     stmt = new SimpleStatement(s"SELECT * FROM ${this.keyspace}.model")
     results = session.execute(stmt)
     val modelsInStorage = new util.HashMap[String, Integer]()
@@ -115,10 +115,10 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
       modelsInStorage.put(row.getString(1), value)
     }
 
-    //Initializes the storage caches
+    //Initializes the caches managed by Storage
     val modelsToInsert = super.initializeCaches(modelNames, dimensions, modelsInStorage, sourcesInStorage)
 
-    //Inserts the model's names for all of the models in the configuration file but not in storage
+    //Inserts the name of each model in the configuration file but not in the model table
     val insertStmt = session.prepare(s"INSERT INTO ${this.keyspace}.model(mid, name) VALUES(?, ?)")
     for ((k, v) <- modelsToInsert.asScala) {
       session.execute(
@@ -158,7 +158,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
         .setBytes(5, ByteBuffer.wrap(segment.parameters))
       batch.add(boundStatement)
 
-      //Cassandra limits the maximum size of a batch
+      //The maximum batch size supported by Cassandra
       if (batch.size() == 65535) {
         session.execute(batch)
         batch.clear()
@@ -185,7 +185,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
           //Reconstructs the gaps array from the bit flag
           val gapsArray = Static.bitsToGaps(gaps, gmdc(gid))
 
-          //Reconstructs the actual start time of the segment
+          //Reconstructs the start time from the end time and length
           val startTime = endTime - (size * gmdc(gid)(0))
           new SegmentGroup(gid, startTime, endTime, mid, params.array, gapsArray)
         }
@@ -220,7 +220,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
   }
 
   override def getRDD(filters: Array[Filter]): RDD[Row] = {
-    //The mapping from Cassandra rows to Spark rows must be stored in a local variable to not serialize the object
+    //The function mapping from Cassandra to Spark rows must be stored in a local variable to not serialize the object
     val rowsToRows = getRowsToRows
     val rdd = this.sparkSession.sparkContext.cassandraTable(this.keyspace, "segment")
 
@@ -247,7 +247,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
       throw new IllegalArgumentException("ModelarDB: unable to parse connection string \"" + connectionString + "\"")
     }
 
-    //Parses the parameters defined by key-value pairs after a ? char
+    //Parses the parameters defined by as key-value pairs after a ? char
     val parsed = new util.HashMap[String, String]()
     if (elems.length == 2) {
       val params = elems(1).split('&')
@@ -286,7 +286,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
     val gid = scala.collection.mutable.Set[Int]()
     val gidPushDownLimit = 1500
 
-    //All filters should be parsed as a set of conjunctions as Spark represents OR as a nested case class
+    //All filters should be parsed as a set of conjunctions as Spark SQL represents OR as a separate case class
     //NOTE: the segments retrieved must be sorted by end_time as Spark fetches segments until a maximum start_time
     for (filter: Filter <- filters) {
       filter match {
@@ -299,23 +299,23 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
         case sources.LessThanOrEqual("gid", value: Int) if value <= gidPushDownLimit => gid ++= 1 to value
         case sources.In("gid", values: Array[Any]) if values.length <= gidPushDownLimit => gid ++= values.map(_.asInstanceOf[Int])
 
-        //Predicate push-down with rows ingested by Apache Spark until the requested start time
+        //Predicate push-down for "start_time" with rows ingested by Apache Spark until the requested start_time
         case sources.LessThan("st", value: Timestamp) => if (value.before(minStartTime)) minStartTime = value; null
         case sources.LessThanOrEqual("st", value: Timestamp) => if (value.before(minStartTime)) minStartTime = value; null
 
-        //Predicate push-down for et using SELECT * FROM segment WHERE et <=> ?
+        //Predicate push-down for end_time using SELECT * FROM segment WHERE et <=> ?
         case sources.GreaterThan("et", value: Timestamp) => predicates.append(s"end_time > '$value'")
         case sources.GreaterThanOrEqual("et", value: Timestamp) => predicates.append(s"end_time >= '$value'")
         case sources.LessThan("et", value: Timestamp) => predicates.append(s"end_time < '$value'")
         case sources.LessThanOrEqual("et", value: Timestamp) => predicates.append(s"end_time <= '$value'")
         case sources.EqualTo("et", value: Timestamp) => predicates.append(s"end_time = '$value'")
 
-        //The predicate cannot be supported when using Apache Cassandra for storage so all we can do is inform the user
+        //If a predicate is not supported when using Apache Cassandra for storage all we can do is inform the user
         case p => Static.warn("ModelarDB: unsupported predicate for CassandraSparkStorage " + p, 120); null
       }
     }
 
-    //The full predicate have been constructed and max start time have been extracted
+    //The full predicate have been constructed and the latest start_time have been extracted
     val pr = if (predicates.isEmpty) null else predicates.mkString(" AND ")
     val tr = if (minStartTime.getTime == Long.MaxValue) null else minStartTime
     val gr = if (gid.isEmpty) null else gid.toArray
@@ -327,7 +327,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
                         rowsToRows: CassandraRow => Row,
                         maxStartTime: Timestamp): RDD[Row] = {
 
-    //For large data sets the reduced memory required makes a scan more efficient
+    //For large data sets a scan is more efficient
     if ( ! Spark.isDataSetSmall(rdd)) {
       return rdd.map(rowsToRows)
     }
@@ -353,10 +353,10 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
           if (startTime > maxStartTimeRaw) {
             val gaps = row.getVarInt("gaps").longValue()
             if (gaps == 0) {
-              //A zero value means that the segments represents data from all time series in the groups
+              //Zero means that the segment contains data from all time series in the group
               sids = 0
             } else {
-              //Each one bit means that a time series is not represented by this segment
+              //A one bit means that this segment does not contain data for the corresponding time series in the group
               sids &= ~gaps
             }
           }
@@ -368,7 +368,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
   private def getRowsToRows: CassandraRow => Row = {
     val gmdc = this.groupMetadataCache
 
-    //Converts the Cassandra rows to Spark rows and reconstruct start time as a long value
+    //Converts the Cassandra rows to Spark rows and reconstructs start_time from length
     //Schema: Int, java.sql.Timestamp, java.sql.Timestamp, Int, Int, Array[Byte], Array[Byte]
     row => {
       val gid = row.getInt("gid")
@@ -381,7 +381,7 @@ class CassandraSparkStorage(connectionString: String) extends Storage with Spark
       //Reconstructs the gaps array from the bit flag
       val gapsArray = Static.bitsToGaps(gaps.longValue(), gmdc(gid))
 
-      //Retrieves the resolution from the metadata cache so the actual rows can be reconstructed
+      //Retrieves the resolution from the metadata cache so start_time can be reconstructed
       val startTime = endTime - (size * gmdc(gid)(0))
       Row(gid, new Timestamp(startTime), new Timestamp(endTime), mid, params.array(), gapsArray)
     }

@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import dk.aau.modelardb.core.DataPoint;
 import dk.aau.modelardb.core.utility.Static;
 
 import java.io.Serializable;
+import java.util.Iterator;
 import java.util.List;
 
 public abstract class Model implements Serializable {
@@ -37,6 +38,14 @@ public abstract class Model implements Serializable {
     abstract public int length();
     abstract public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps);
 
+    public boolean withinErrorBound(float errorBound, Iterator<DataPoint> tsA, Iterator<DataPoint> tsB) {
+        boolean allWithinErrorBound = true;
+        while (allWithinErrorBound && tsA.hasNext() && tsB.hasNext()){
+            allWithinErrorBound &= Static.percentageError(tsA.next().value, tsB.next().value) < errorBound;
+        }
+        return allWithinErrorBound;
+    }
+
     final public float compressionRatio(long startTime, long endTime, int resolution, List<DataPoint[]> dps, int gaps) {
         //   DPs sid: int, ts: long, v: float
         // model sid: int, start_time: long, end_time: long, mid: int, parameters: bytes[], gaps: bytes[]
@@ -45,13 +54,8 @@ public abstract class Model implements Serializable {
     }
 
     final public float unsafeSize() {
-        //Computes the size but does not provide the model with the information necessary for the model to verify its precision
+        //Computes the size without providing the model with the information necessary for it to verify its precision
         return this.size(0L, 0L, 0, new java.util.ArrayList<>());
-    }
-
-    /** Protected Methods **/
-    final protected boolean outsidePercentageErrorBound(double approximation, double real) {
-        return Static.percentageError(approximation, real) > this.error;
     }
 
     /** Instance Variables **/

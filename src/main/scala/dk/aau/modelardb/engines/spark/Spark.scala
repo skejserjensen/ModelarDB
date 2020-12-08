@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ class Spark(interface: String, engine: String, storage: Storage, dimensions: Dim
 
   /** Public Methods **/
   def start(): Unit = {
-    //Creates the Spark Session, Spark Streaming Context, and the companion object
+    //Creates the Spark Session, Spark Streaming Context, and initializes the companion object
     val (ss, ssc) = initialize()
 
     //Starts listening for and executes queries using the user-configured interface
@@ -36,7 +36,7 @@ class Spark(interface: String, engine: String, storage: Storage, dimensions: Dim
       q => ss.sql(q).toJSON.collect()
     )
 
-    //Ensures that the main thread does not exit during ingestion
+    //Ensures that Spark does not terminate until ingestion is safely stopped
     if (ssc != null) {
       Static.info("ModelarDB: awaiting termination")
       ssc.awaitTermination()
@@ -49,14 +49,14 @@ class Spark(interface: String, engine: String, storage: Storage, dimensions: Dim
 
   /** Private Methods **/
   private def initialize(): (SparkSession, StreamingContext) = {
-    //Constructs the needed Spark Conf and Spark Session Builder
+    //Constructs the necessary Spark Conf and Spark Session Builder
     val master = if (engine == "spark") "local[*]" else engine
     val conf = new SparkConf()
       .set("spark.streaming.unpersist", "false")
       .set("spark.streaming.stopGracefullyOnShutdown", "true")
     val ssb = SparkSession.builder.master(master).config(conf)
 
-    //Checks if the storage provided have native Apache Spark integration
+    //Checks if the Storage instance provided has native Apache Spark integration
     val spark = storage match {
       case storage: SparkStorage =>
         storage.open(ssb, dimensions)
@@ -91,11 +91,12 @@ class Spark(interface: String, engine: String, storage: Storage, dimensions: Dim
       dataPointView.schema.zipWithIndex.map(t => t._1.name -> (t._2 + 1)).toMap)
     SparkUDAF.initialize(spark)
 
-    //Last, return the Spark interfaces so processing can start
+    //Last, return the Spark interfaces so they can be controlled
     (spark, ssc)
   }
 
   private def setupStream(spark: SparkSession, timeSeriesGroups: Array[TimeSeriesGroup]): StreamingContext = {
+    //Creates receiverCount receivers with each receiving a working set created by Partitioner.partitionTimeSeries
     val ssc = new StreamingContext(spark.sparkContext, Seconds(microBatchSize))
     val midCache = Spark.getStorage.getMidCache
     val workingSets = Partitioner.partitionTimeSeries(Configuration.get(), timeSeriesGroups, midCache, receiverCount)
@@ -103,12 +104,11 @@ class Spark(interface: String, engine: String, storage: Storage, dimensions: Dim
       throw new java.lang.RuntimeException("ModelarDB: spark engine did not receive a workings sets for each receiver")
     }
 
-    //Creates receiverCount receivers with the time series distributed as per modelardb.partitionby
     val modelReceivers = workingSets.map(ws => new WorkingSetReceiver(ws))
     val streams = modelReceivers.map(ssc.receiverStream(_))
     val stream = ssc.union(streams.toSeq)
 
-    //If querying and temporary segments are disabled segments can written directly disk, if not setup in-memory caching
+    //If querying and temporary segments are disabled, segments can be written directly to disk without being cached
     if (interface == "none" && Configuration.get().getLatency == 0) {
       stream.foreachRDD(Spark.getCache.write(_))
       Static.info("ModelarDB: Spark Streaming initialized in bulk-loading mode")
@@ -132,7 +132,7 @@ object Spark {
     this.storage = storage
     this.sparkStorage = null
 
-    //If the methods provided by the SparkStorage interface provider deeper integration with Apache Spark
+    //The methods in the SparkStorage trait provides deeper integration with Apache Spark
     if (storage.isInstanceOf[SparkStorage]) {
       this.sparkStorage = storage.asInstanceOf[SparkStorage]
     }

@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,11 +19,11 @@ import dk.aau.modelardb.core.utility.BitBuffer;
 
 import java.util.List;
 
-// The implementation of this model is based on code published by Michael Burman
+//The implementation of this model is based on code published by Michael Burman
 // under the Apache2 license. LINK: https://github.com/burmanm/gorilla-tsc
 class FacebookGorillaModel extends Model {
 
-    /** Constructor **/
+    /** Constructors **/
     FacebookGorillaModel(int mid, float error, int limit) {
         super(mid, error, limit);
         this.currentSize = 0;
@@ -139,9 +139,9 @@ class FacebookGorillaModel extends Model {
 
 class FacebookGorillaSegment extends Segment {
 
-    /** Constructor **/
+    /** Constructors **/
     FacebookGorillaSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
-        //Capacity is used as the segment must be guaranteed to get the total number of data points it represent
+        //Unlike length(), capacity() is not impacted by changes to the segment's start time
         super(sid, startTime, endTime, resolution, offsets);
         this.values = decompress(parameters, super.capacity());
     }
@@ -202,7 +202,7 @@ class FacebookGorillaSegment extends Segment {
         for (int i = 1; i < length; i++) {
             if (bitBuffer.readBit()) {
                 if (bitBuffer.readBit()) {
-                    // New leading and trailing zeros
+                    //New leading and trailing zeros
                     storedLeadingZeros = bitBuffer.getInt(5);
                     byte significantBits = (byte) bitBuffer.getInt(6);
                     if (significantBits == 0) {

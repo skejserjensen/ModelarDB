@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -100,7 +100,7 @@ public class TimeSeriesGroup implements Serializable {
             TimeSeries ts = this.timeSeries[i];
             ts.initialize.run();
 
-            //Stores the first data point from each time series and the timestamp of the earliest data point
+            //Stores the first data point from each time series to track when a gap occurs
             if (ts.hasNext()) {
                 this.nextDataPoints[i] = ts.next();
                 if (this.nextDataPoints[i] == null) {

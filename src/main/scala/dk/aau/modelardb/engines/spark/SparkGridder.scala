@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import scala.collection.JavaConverters._
 
 object SparkGridder {
 
-  /* Public Functions */
+  /** Public Functions **/
   def initialize(segmentViewMappings: Map[String, Int], dataPointViewMappings: Map[String, Int]): Unit = {
     this.segmentViewNameToIndex = segmentViewMappings
     this.dataPointViewNameToIndex = dataPointViewMappings
@@ -36,12 +36,12 @@ object SparkGridder {
 
     //NOTE: optimized projection methods are not generated for all combinations
     // of columns in the segment view due to technical limitations, the Scala
-    // compiler cannot compile the large amount of generated code. Instead an
+    // compiler cannot compile the large amount of generated code. Instead, an
     // appropriate subset is selected to match the requirement of queries from
     // the Data Point View and queries using the optimized UDAFs for aggregate
-    // queries. This ensures all queries intended for the Segment View use an
+    // queries. This ensures most queries sent to the Segment View can use an
     // optimized projection method generated using static code generation,
-    // despite the limitations of Scalac, while keeping the compile time low.
+    // despite the limitations of Scalac, while keeping the compile time low
     val target = computeJumpTarget(requiredColumns, SparkGridder.segmentViewNameToIndex, 7)
     (target: @switch) match {
       case 0 =>

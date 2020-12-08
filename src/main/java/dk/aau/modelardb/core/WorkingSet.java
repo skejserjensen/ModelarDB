@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -107,7 +107,7 @@ public class WorkingSet implements Serializable {
         Selector selector = Selector.open();
         int unboundedChannelsRegistered = 0;
 
-        //The time series are all attached to the selector to allow multiple iterations over the segment generators
+        //The SegmentGenerators are attached to the Selector to make them easy to access when a data point is received
         while (this.currentTimeSeries < this.timeSeriesGroups.length) {
             TimeSeriesGroup tsg = this.timeSeriesGroups[this.currentTimeSeries];
             SegmentGenerator sg = getNextSegmentGenerator();
@@ -135,7 +135,7 @@ public class WorkingSet implements Serializable {
                     throw new IOException("CORE: non-readable channel selected");
                 }
 
-                //Processes the data points with the segment generator and closes the channel if an error occur
+                //Processes the data points using the segment generator and closes the channel if an error occur
                 SegmentGenerator sg = (SegmentGenerator) key.attachment();
                 try {
                     sg.consumeAllDataPoints();

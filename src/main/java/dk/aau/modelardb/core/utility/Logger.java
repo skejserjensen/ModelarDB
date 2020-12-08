@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,11 +41,8 @@ public class Logger implements Serializable {
         this.finalizedParameterSize += logger.finalizedParameterSize;
         this.finalizedGapSize += logger.finalizedGapSize;
 
-        logger.finalizedSegmentCounter.forEach((k, v) ->
-                this.finalizedSegmentCounter.merge(k, v, (v1, v2) -> v1 + v2));
-
-        logger.finalizedDataPointCounter.forEach((k, v) ->
-                this.finalizedDataPointCounter.merge(k, v, (v1, v2) -> v1 + v2));
+        logger.finalizedSegmentCounter.forEach((k, v) -> this.finalizedSegmentCounter.merge(k, v, Long::sum));
+        logger.finalizedDataPointCounter.forEach((k, v) -> this.finalizedDataPointCounter.merge(k, v, Long::sum));
     }
 
     public String getTimeSpan() {
@@ -85,11 +82,11 @@ public class Logger implements Serializable {
         this.finalizedParameterSize += finalizedModel.unsafeSize();
 
         String modelType = finalizedModel.getClass().getName();
-        int count = this.finalizedSegmentCounter.getOrDefault(modelType, 0);
+        long count = this.finalizedSegmentCounter.getOrDefault(modelType, 0L);
         this.finalizedSegmentCounter.put(modelType, count + 1);
 
-        count = this.finalizedDataPointCounter.getOrDefault(modelType, 0);
-        int dataPoints = (this.groupSize  - segmentGapsSize) * finalizedModel.length();
+        count = this.finalizedDataPointCounter.getOrDefault(modelType, 0L);
+        long dataPoints = (this.groupSize  - segmentGapsSize) * finalizedModel.length();
         this.finalizedDataPointCounter.put(modelType, count + dataPoints);
 
         this.finalizedGapSize += segmentGapsSize * 4;
@@ -97,19 +94,18 @@ public class Logger implements Serializable {
 
     public void printGeneratorResult() {
         //Prints the number of points that have been stored as each type of segment for debugging
-        int finalizedCounter = 0;
         System.out.println("\nTemporary Segment Counter - Total: " + this.temporarySegmentCounter);
         System.out.println("Temporary DataPoint Counter - Total: " + this.temporaryDataPointCounter);
 
-        finalizedCounter = this.finalizedSegmentCounter.values().stream().mapToInt(Integer::intValue).sum();
+        long finalizedCounter = this.finalizedSegmentCounter.values().stream().mapToLong(Long::longValue).sum();
         System.out.println("\nFinalized Segment Counter - Total: " + finalizedCounter);
-        for (Map.Entry<String, Integer> e : this.finalizedSegmentCounter.entrySet()) {
+        for (Map.Entry<String, Long> e : this.finalizedSegmentCounter.entrySet()) {
             System.out.println("-- " + e.getKey() + " | Count: " + e.getValue());
         }
 
-        finalizedCounter = this.finalizedDataPointCounter.values().stream().mapToInt(Integer::intValue).sum();
+        finalizedCounter = this.finalizedDataPointCounter.values().stream().mapToLong(Long::longValue).sum();
         System.out.println("\nFinalized Segment DataPoint Counter - Total: " + finalizedCounter);
-        for (Map.Entry<String, Integer> e : this.finalizedDataPointCounter.entrySet()) {
+        for (Map.Entry<String, Long> e : this.finalizedDataPointCounter.entrySet()) {
             System.out.println("-- " + e.getKey() + " | DataPoint: " + e.getValue());
         }
         //   DPs sid: int, ts: long, v: float
@@ -121,8 +117,8 @@ public class Logger implements Serializable {
     }
 
     public void printWorkingSetResult() {
-        int dataPointCounter = this.finalizedDataPointCounter.values().stream().mapToInt(Integer::intValue).sum();
-        int segmentCounter = this.finalizedSegmentCounter.values().stream().mapToInt(Integer::intValue).sum();
+        long dataPointCounter = this.finalizedDataPointCounter.values().stream().mapToLong(Long::longValue).sum();
+        long segmentCounter = this.finalizedSegmentCounter.values().stream().mapToLong(Long::longValue).sum();
         int cs = Float.toString(dataPointCounter).length();
 
         System.out.println("=========================================================");
@@ -168,6 +164,6 @@ public class Logger implements Serializable {
     private float finalizedParameterSize = 0.0F;
     private float finalizedGapSize = 0.0F;
 
-    private final java.util.HashMap<String, Integer> finalizedSegmentCounter = new java.util.HashMap<>();
-    private final java.util.HashMap<String, Integer> finalizedDataPointCounter = new java.util.HashMap<>();
+    private final java.util.HashMap<String, Long> finalizedSegmentCounter = new java.util.HashMap<>();
+    private final java.util.HashMap<String, Long> finalizedDataPointCounter = new java.util.HashMap<>();
 }

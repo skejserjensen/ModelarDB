@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,14 @@
 package dk.aau.modelardb.core.utility;
 
 import dk.aau.modelardb.core.*;
-import dk.aau.modelardb.core.models.Segment;
 
-import java.io.FileWriter;
 import java.io.IOException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
-import java.time.LocalTime;
+import java.time.LocalDateTime;
 import java.util.*;
 
 public class Static {
@@ -72,7 +70,7 @@ public class Static {
 
     public static TimeSeries[] merge(TimeSeries[] tsA, TimeSeries[] tsB) {
         TimeSeries[] tss = new TimeSeries[tsA.length + tsB.length];
-        //The join and split algorithms depend on each group being numerically ordered by sid
+        //The split and join algorithms depend on each group being numerically ordered by sid
         if (tsA[0].sid < tsB[0].sid) {
             System.arraycopy(tsA, 0, tss, 0, tsA.length);
             System.arraycopy(tsB, 0, tss, tsA.length, tsB.length);
@@ -111,8 +109,12 @@ public class Static {
         return (float) (sum / dps.length);
     }
 
+    public static boolean outsidePercentageErrorBound(float error, double approximation, double real) {
+        return Static.percentageError(approximation, real) > error;
+    }
+
     public static double percentageError(double approximation, double real) {
-        //Necessary as the method would return NaN if approximation and real are both 0.0 otherwise
+        //Necessary as the method would return NaN if approximation and real are both zero otherwise
         if (approximation == real) {
             return 0.0;
         }
@@ -132,7 +134,7 @@ public class Static {
         for (int g : values) {
             //The metadata cache contains the resolution as the first element
             int sid = Arrays.binarySearch(sources, 1, sources.length, g);
-            bs.set(sid - 1); //Sids start at one but there is not reason to waste a bit
+            bs.set(sid - 1); //Sids start at one, but there is no reason to waste a bit
         }
         return bs.toLongArray()[0];
     }
@@ -142,7 +144,7 @@ public class Static {
         ArrayList<Integer> gaps = new ArrayList<>();
         while (value != 0L) {
             if (value % 2L != 0) {
-                //Sids start at one but there is not reason to waste a bit so each sid are stored as sid - 1
+                //Sids start at one, but gaps are stored as sid - 1 to not waste a bit
                 gaps.add(sources[index + 1]);
             }
             ++index;
@@ -192,7 +194,7 @@ public class Static {
     }
 
     public static void log(String line, String level) {
-        System.out.printf("[%s] (%s) %s\n", LocalTime.now(), level, line);
+        System.out.printf("[%s] (%s) %s\n", LocalDateTime.now(), level, line);
     }
 
     public static void log(String line, String level, int limit) {
@@ -220,92 +222,15 @@ public class Static {
                     if (ip instanceof Inet6Address)
                         continue;
 
-                    if (result.length() == 0) {
-                        result.append(ip.getHostAddress());
-                    } else {
+                    if (result.length() != 0) {
                         result.append(",");
-                        result.append(ip.getHostAddress());
                     }
+                    result.append(ip.getHostAddress());
                 }
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
         return result.toString();
-    }
-
-    public static void writeModelDebugFile(String debugFilePath, Storage storage, TimeSeries realTimeSeries, float error) {
-        ArrayList<String> debugOutputBuffer = new ArrayList<>();
-
-        //Reinitializes all time series to reset the iterators
-        Iterator<Pair<DataPoint, Segment>> modelledTimeSeries =  storage.getSegments().flatMap(segmentData -> {
-            Segment[] segments = segmentData.toSegments(storage);
-            return Arrays.stream(segments).flatMap(segment -> segment.grid().map(dp -> new Pair<>(dp, segment)));
-        }).iterator();
-        realTimeSeries.initialize.run();
-
-        while (realTimeSeries.hasNext() && modelledTimeSeries.hasNext()) {
-            DataPoint os = realTimeSeries.next();
-            Pair<DataPoint, Segment> ms = modelledTimeSeries.next();
-
-            String sb = String.valueOf(ms._1.timestamp / 1000) + ';' +  os.value + ';' + ms._1.value + ';' +
-                    error + ';' + System.identityHashCode(ms._2) + ';' + ms._2.getClass().getName() + '\n';
-            debugOutputBuffer.add(sb);
-        }
-
-        //Verifies that the time series are of equal length before writing the buffer to disk
-        if ((realTimeSeries.hasNext() && realTimeSeries.next() != null) || modelledTimeSeries.hasNext()) {
-            throw new java.lang.IllegalArgumentException("CORE: modelardb.resolution must match the original sampling rate for debug");
-        }
-
-        String header = "timestamp;real_value;approx_value;error;segment_id;segment_type\n";
-        Static.writeDebugFile(debugFilePath, header, debugOutputBuffer);
-    }
-
-    public static void writeDimensionDebugFile(String debugFilePath, Dimensions dimensions) {
-        //Constructs fake time series for each line in the dimensions file
-        String[] sources = dimensions.getSources();
-        TimeSeries[] tss = new TimeSeries[sources.length];
-        for (int i = 0; i < sources.length; i++) {
-            tss[i] = new TimeSeries(sources[i], 0, 0, "", false, 0, "", "", 0, "");
-        }
-
-        TimeSeriesGroup[] tsgs = Partitioner.groupTimeSeries(Configuration.get(), tss, 0);
-        Arrays.sort(tsgs, (a, b) -> -Integer.compare(a.size(), b.size()));
-
-        ArrayList<String> debugOutputBuffer = new ArrayList<>();
-        StringBuilder sb = new StringBuilder();
-        for (TimeSeriesGroup tsg : tsgs) {
-            for (TimeSeries ts : tsg.getTimeSeries()) {
-                Object[] columns = dimensions.get(ts.source);
-                sb.append(ts.source);
-                for (Object col : columns) {
-                    sb.append(",");
-                    sb.append(col.toString());
-                }
-                sb.append("\n");
-            }
-            sb.append("\n");
-            debugOutputBuffer.add(sb.toString());
-            sb.setLength(0);
-        }
-
-        Static.writeDebugFile(debugFilePath, null, debugOutputBuffer);
-    }
-
-    /** Private Methods **/
-    private static void writeDebugFile(String debugFilePath, String header, ArrayList<String> debugOutputBuffer) {
-        try {
-            FileWriter debugOutputFile = new FileWriter(debugFilePath);
-            if (header != null) {
-                debugOutputFile.write(header);
-            }
-            for (String line : debugOutputBuffer) {
-                debugOutputFile.write(line);
-            }
-            debugOutputFile.close();
-        } catch (IOException ioe) {
-            throw new java.lang.RuntimeException("CORE: unable to write debug output file due to " + ioe);
-        }
     }
 }

@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -222,7 +222,7 @@ public class TimeSeries implements Serializable, Iterator<DataPoint> {
                 this.nextBuffer.delete(0, nextDataPointIndex);
             }
 
-            //Parses the timestamp column as either Unix time, Java time, or as a human readable timestamp
+            //Parses the timestamp column as either Unix time, Java time, or a human readable timestamp
             long timestamp = 0;
             switch (this.dateParserType) {
                 case 1:

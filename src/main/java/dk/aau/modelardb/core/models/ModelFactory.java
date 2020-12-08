@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ public class ModelFactory {
 
     /** Public Methods **/
     public static Model getFallbackModel(float error, int limit) {
-        //Per definition the mid of the fallback model is 1
+        //Per definition the mid of the fallback model is one
         return getModel("dk.aau.modelardb.core.models.UncompressedModel", 1, error, limit);
     }
 

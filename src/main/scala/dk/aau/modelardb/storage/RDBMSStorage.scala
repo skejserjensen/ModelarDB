@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ class RDBMSStorage(connectionString: String) extends Storage {
     this.connection = DriverManager.getConnection(connectionString)
     this.connection.setAutoCommit(false)
 
-    //Checks if the table exists and create them if necessary
+    //Checks if the tables exist and create them if necessary
     val metadata = this.connection.getMetaData
     val tableType = Array("TABLE")
     val tables = metadata.getTables(null, null, "segment", tableType)
@@ -57,7 +57,7 @@ class RDBMSStorage(connectionString: String) extends Storage {
     getFirstInteger(this.getMaxGidStmt)
   }
 
-  override def initialize(timeSeriesGroups: Array[TimeSeriesGroup], dimensions: Dimensions, models: Array[String]): Unit = {
+  override def initialize(timeSeriesGroups: Array[TimeSeriesGroup], dimensions: Dimensions, modelNames: Array[String]): Unit = {
     //Inserts the metadata for the sources defined in the configuration file (Sid, Resolution, Gid, Dimensions)
     val sourceDimensions = dimensions.getColumns.length
     val columns = "?, " * (sourceDimensions + 3) + "?"
@@ -101,7 +101,7 @@ class RDBMSStorage(connectionString: String) extends Storage {
     }
 
 
-    //Extracts all model names from storage
+    //Extracts the name of all models in storage
     stmt = this.connection.createStatement()
     results = stmt.executeQuery("SELECT * FROM model")
     val modelsInStorage = new util.HashMap[String, Integer]()
@@ -109,10 +109,10 @@ class RDBMSStorage(connectionString: String) extends Storage {
       modelsInStorage.put(results.getString(2), results.getInt(1))
     }
 
-    //Initializes the storage caches
-    val modelsToInsert = super.initializeCaches(models, dimensions, modelsInStorage, sourcesInStorage)
+    //Initializes the caches managed by Storage
+    val modelsToInsert = super.initializeCaches(modelNames, dimensions, modelsInStorage, sourcesInStorage)
 
-    //Inserts the model's names for all of the models in the configuration file but not in storage
+    //Inserts the name of each model in the configuration file but not in the model table
     val insertModelStmt = connection.prepareStatement("INSERT INTO model VALUES(?, ?)")
     for ((k, v) <- modelsToInsert.asScala) {
       insertModelStmt.clearParameters()

@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,11 +40,11 @@ class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQ
   override def unhandledFilters(filters: Array[Filter]): Array[Filter] = filters
 
   override def buildScan(requiredColumns: Array[String], filters: Array[Filter]): RDD[Row] = {
-    //DEBUG: prints the columns and predicates Spark have pushed to the view
+    //DEBUG: prints the columns and predicates Spark has pushed to the view
     Static.info("ModelarDB: segment required columns { " + requiredColumns.mkString(" ") + " }")
     Static.info("ModelarDB: segment provided filters { " + filters.mkString(" ") + " }")
 
-    //Extract segment groups from the segment group store and expand each into a set of segments
+    //Extracts segment groups from the segment group store and expand each into a set of segments
     val segmentGroupRows = getSegmentGroupRDD(filters)
     val segmentGroupRowToSegmentRows = getSegmentGroupRowToSegmentRows
     val segmentRows = segmentGroupRows.flatMap(segmentGroupRowToSegmentRows(_))
@@ -53,7 +53,7 @@ class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQ
 
   /** Private Methods **/
   private def getSegmentGroupRDD(filters: Array[Filter]): RDD[Row] = {
-    //Sids and dimensional values are mapped to Gids so only segments from the needed groups are retrieved
+    //Sids and members are mapped to Gids so only segments from the necessary groups are retrieved
     val sgc = Spark.getStorage.getSourceGroupCache
     val idc = Spark.getStorage.getInverseDimensionsCache
 
@@ -73,7 +73,7 @@ class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQ
       case f => f
     }
 
-    //DEBUG: prints the predicates spark expects from the view after query rewriting with a limit of 120 chars
+    //DEBUG: prints the predicates spark provides the segment group store after query rewriting
     Static.info("ModelarDB: segment rewritten filters { " + gidFilters.mkString(" ") + " }", 120)
     this.cache.getSegmentGroupRDD(gidFilters)
   }
@@ -88,7 +88,7 @@ class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQ
 
   private def sidRangeToGidIn(startSid: Int, endSid: Int, sgc: Array[Int], maxSid: Int): Filter = {
     if (endSid <= 0 || startSid >= maxSid) {
-      //All sids are outside the range of assigned sids, so a sentinel is used to ensure no gid match
+      //All sids are outside the range of assigned sids, so a sentinel is used to ensure no gids match
       return sources.EqualTo("gid", -1)
     }
 

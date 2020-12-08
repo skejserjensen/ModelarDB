@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import java.nio.ByteBuffer;
 
 public class SegmentGroup {
 
-    /** Constructor **/
+    /** Constructors **/
     public SegmentGroup(int gid, long startTime, long endTime, int mid, byte[] parameters, byte[] offsets) {
         this.gid = gid;
         this.startTime = startTime;
@@ -34,7 +34,7 @@ public class SegmentGroup {
 
     /** Public Methods **/
     public String toString() {
-        //The segment might not represent all time series in the time series group
+        //The segments might not represent all time series in the time series group
         int[] os = Static.bytesToInts(this.offsets);
         StringBuilder sb = new StringBuilder();
         sb.append("Segment: [").append(this.gid).append(" | ").append(this.startTime).append(" | ")

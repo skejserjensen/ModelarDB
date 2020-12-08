@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 package dk.aau.modelardb.engines.spark
+
 import java.sql.Timestamp
 
 import dk.aau.modelardb.core.utility.Static
@@ -34,7 +35,7 @@ class ViewDataPoint(dimensions: Array[StructField]) (@transient override val sql
   override def unhandledFilters(filters: Array[Filter]): Array[Filter] = filters
 
   override def buildScan(requiredColumns: Array[String], filters: Array[Filter]): RDD[Row] = {
-    //DEBUG: prints the columns and predicates spark expects from the view
+    //DEBUG: prints the columns and predicates Spark has pushed to the view
     Static.info("ModelarDB: data point required columns { " + requiredColumns.mkString(" ") + " }")
     Static.info("ModelarDB: data point filters { " + filters.mkString(" ") + " }")
 
@@ -47,7 +48,7 @@ class ViewDataPoint(dimensions: Array[StructField]) (@transient override val sql
     var df = Spark.getViewProvider.option("type", "Segment").load()
     for (filter: Filter <- filters) {
       filter match {
-        //Cases are only added for sid and ts as the segment view have no understanding of min / max values
+        //Cases are only added for sid and ts as the segment view have no understanding of min/max values
         case sources.GreaterThan("sid", value: Int) => df = df.filter(s"sid > $value")
         case sources.GreaterThanOrEqual("sid", value: Int) => df = df.filter(s"sid >= $value")
         case sources.LessThan("sid", value: Int) => df = df.filter(s"sid < $value")
@@ -62,15 +63,16 @@ class ViewDataPoint(dimensions: Array[StructField]) (@transient override val sql
         case sources.EqualTo("ts", value: Timestamp) => df =
           df.filter(s"st <= CAST('$value' AS TIMESTAMP) AND et >= CAST('$value' AS TIMESTAMP)")
 
-        //All equal predicates on the dimensional columns can be pushed directly to the segment view for conversion to Sids
+        //All predicates requesting specific members can be pushed directly to the segment view for conversion to Gids
         case sources.EqualTo(column: String, value: Any) if column != "val" => df = if (value.isInstanceOf[String])
           df.filter(s"$column = '$value'") else df.filter(s"$column = $value")
 
-        //The predicate cannot be supported by the segment view so all we can do is inform the user
+        //If a predicate is not supported by the segment view all we can do is inform the user
         case p => Static.warn("ModelarDB: unsupported predicate for DataPointView predicate push-down " + p)
       }
     }
-    //Dimensions will be appended to each data point so they are not requested for each segment
+
+    //Dimensions are appended to each data point if necessary, so they are not requested from the segment view
     df = df.select("sid", "st", "et", "res", "mid", "param", "gaps")
     df.rdd
   }

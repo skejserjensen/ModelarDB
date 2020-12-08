@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ public abstract class Storage {
     abstract public void open(Dimensions dimensions);
     abstract public int getMaxSID();
     abstract public int getMaxGID();
-    abstract public void initialize(TimeSeriesGroup[] timeSeriesGroups, Dimensions dimensions, String[] models);
+    abstract public void initialize(TimeSeriesGroup[] timeSeriesGroups, Dimensions dimensions, String[] modelNames);
     abstract public void close();
     abstract public void insert(SegmentGroup[] segments, int length);
     abstract public Stream<SegmentGroup> getSegments();
@@ -71,7 +71,7 @@ public abstract class Storage {
                                                         HashMap<String, Integer> modelsInStorage,
                                                         HashMap<Integer, Object[]> sourcesInStorage) {
 
-        //The dimensions object is stored so the schema can be retrieved later
+        //The Dimensions object is stored so the schema can be retrieved later
         this.dimensions = dimensions;
 
         //Computes the set of models that must be inserted for the system to
@@ -105,7 +105,7 @@ public abstract class Storage {
         this.dimensionsCache = new Object[sourcesCachesSize][];
         HashMap<Integer, ArrayList<Integer>> gsc = new HashMap<>();
         sourcesInStorage.forEach((sid, metadata) -> {
-            //The metadata is defined as (Sid = Scaling, Resolution, Gid, Dimensions)
+            //Metadata is a mapping from Sid to Scaling, Resolution, Gid, and Dimensions
             int gid = (int) metadata[2];
             this.sourceGroupCache[sid] = gid;
             this.sourceScalingFactorCache[sid] = (float) metadata[0];
@@ -184,7 +184,7 @@ public abstract class Storage {
     //Read Cache: Maps the sid of a source to the members provided for that data source
     protected Object[][] dimensionsCache;
 
-    //Read Cache: Maps the value of a column for a dimension to the gids with that dimensional value
+    //Read Cache: Maps the value of a column for a dimension to the gids with that member
     protected HashMap<String, HashMap<Object, Integer[]>> inverseDimensionsCache;
 
     //Read Cache: Maps the gid of a group to the groups resolution and the sids that are part of that group

@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package dk.aau.modelardb.core;
 
 import dk.aau.modelardb.core.models.Model;
 import dk.aau.modelardb.core.utility.Logger;
+import dk.aau.modelardb.core.utility.ReverseBufferIterator;
 import dk.aau.modelardb.core.utility.SegmentFunction;
 import dk.aau.modelardb.core.utility.Static;
 
@@ -30,7 +31,7 @@ class SegmentGenerator {
     SegmentGenerator(TimeSeriesGroup timeSeriesGroup, Supplier<Model[]> modelsInitializer, Model fallbackModel, List<Integer> sids,
                      int latency, float dynamicSplitFraction, SegmentFunction temporaryStream, SegmentFunction finalizedStream) {
 
-        //Variables from object constructor
+        //Variables from the constructor
         this.gid = timeSeriesGroup.gid;
         this.timeSeriesGroup = timeSeriesGroup;
         this.models = modelsInitializer.get();
@@ -43,7 +44,7 @@ class SegmentGenerator {
         this.finalizedStream = finalizedStream;
         this.temporaryStream = temporaryStream;
 
-        //State variables for splitting
+        //State variables for controlling split generators
         this.emittedSegments = 0;
         this.compressionRatioAverage = 0.0;
         this.segmentsBeforeNextJoinCheck = 1;
@@ -51,7 +52,7 @@ class SegmentGenerator {
         this.splitSegmentGenerators = new ArrayList<>();
         this.splitsToJoinIfCorrelated = new HashSet<>();
 
-        //State variables for the latest data points
+        //State variables for buffering data points
         this.gaps = new HashSet<>();
         this.buffer = new ArrayList<>();
         this.prevTimeStamps = new long[timeSeriesGroup.size()];
@@ -69,12 +70,12 @@ class SegmentGenerator {
     /** Package Methods **/
     void consumeAllDataPoints() {
         while (this.timeSeriesGroup.hasNext()) {
-            //Ingest data points until a split occurs or no more data points are available
+            //Ingests data points until a split occurs or no more data points are available
             while (this.splitSegmentGenerators.isEmpty() && this.timeSeriesGroup.hasNext()) {
                 consumeDataPoints(this.timeSeriesGroup.next(), this.timeSeriesGroup.getActiveTimeSeries());
             }
 
-            //Ingest data points for all splits until they are all joined or no more data points are available
+            //Ingests data points for all splits until they are all joined or no more data points are available
             boolean splitSegmentGeneratorHasNext = true;
             while ( ! this.splitSegmentGenerators.isEmpty() && splitSegmentGeneratorHasNext) {
                 splitSegmentGeneratorHasNext = false;
@@ -107,27 +108,27 @@ class SegmentGenerator {
         //this.logger.pauseAndPrint(curDataPointsAndGaps);
         //this.logger.sleepAndPrint(curDataPointsAndGaps, 5000);
 
-        //If no sources provided any values for this SI all computations can be skipped
+        //If no sources provide any values for this SI all computations can be skipped
         if (activeTimeSeries == 0) {
             return;
         }
 
-        //If any of the time series are missing values a gap is stored for that time series
+        //If any of the time series are missing values, a gap is stored for that time series
         int nextDataPoint = 0;
         DataPoint[] curDataPoints = new DataPoint[activeTimeSeries];
         for (int i = 0; i < curDataPointsAndGaps.length; i++) {
             DataPoint cdpg = curDataPointsAndGaps[i];
             if (Float.isNaN(cdpg.value)) {
-                //A null value indicate the start of a gap so we flush and store it's sid in gaps
+                //A null value indicates the start of a gap, so we flush and store its sid in gaps
                 if ( ! this.gaps.contains(cdpg.sid)) {
                     flushBuffer();
                     this.gaps.add(cdpg.sid);
                 }
             } else {
-                //A normal value might indicate the end of a gap if more then SI have pass
+                //A floating-point value indicates the end of a gap if more then SI have pass
                 long pts = this.prevTimeStamps[i];
                 if ((cdpg.timestamp - pts) > this.resolution) {
-                    //A gap have ended so we flush the buffer and remove the Sid from gaps
+                    //A gap have ended so we flush the buffer and remove the sid from gaps
                     flushBuffer();
                     this.gaps.remove(cdpg.sid);
                 }
@@ -136,17 +137,17 @@ class SegmentGenerator {
                 nextDataPoint++;
             }
         }
-        //A new data point have been ingested but not yet emitted
+        //A new data point has been ingested but not yet emitted
         this.buffer.add(curDataPoints);
         this.yetEmitted++;
 
-        //The current model is provided the data points and we verify that the model can represent the segment,
-        // we assume that append will fail if it failed in the past, so (t,V) must fail if (t-1, V) failed.
+        //The current model is given the data points and we verify that the model can represent them and all prior,
+        // we assume that append will fail if it failed in the past, so append(t,V) must fail if append(t-1,V) failed
         if ( ! this.currentModel.append(curDataPoints)) {
             this.modelIndex += 1;
             if (this.modelIndex == this.models.length) {
-                //If none of the models can represent the current segment, we select the model then
-                // provide the best compression ratio and construct a segment object using that model
+                //If none of the models can represent all of the buffered data points, we select the model that
+                // provides the best compression and construct a segment using that model to represent the values
                 emitFinalSegment();
                 resetModelIndex();
             } else {
@@ -155,8 +156,8 @@ class SegmentGenerator {
             }
         }
 
-        //Emit a temporary segment if latency data points have been added to the buffer without a finalized segment being
-        // emitted, if the current model does not represent all data points in the buffer the fallback model is used
+        //Emits a temporary segment if latency data points have been added to the buffer without a finalized segment being
+        // emitted, if the current model does not represent all of the data points in the buffer the fallback model is used
         if (this.latency > 0 && this.yetEmitted == this.latency) {
             emitTemporarySegment();
             this.yetEmitted = 0;
@@ -174,8 +175,8 @@ class SegmentGenerator {
             models[this.modelIndex].initialize(this.buffer);
         }
 
-        //Until the buffer no longer contain data points we greedily construct segments,
-        // dynamic splitting is disabled as flushing can cause segment with low compression
+        //Finalized segments are emitted until the buffer is empty, dynamic splitting is disabled as flushing can
+        // create models with a poor compression ratio despite the time series in the group still being correlated
         float splitHeuristicOld = this.dynamicSplitFraction;
         this.dynamicSplitFraction = 0;
         while ( ! buffer.isEmpty()) {
@@ -189,14 +190,14 @@ class SegmentGenerator {
     }
 
     private void resetModelIndex() {
-        //Restarts the modelling process with the first model
+        //Restarts ingestion using the first model and the currently buffered data points
         this.modelIndex = 0;
         this.currentModel = models[modelIndex];
         this.currentModel.initialize(this.buffer);
     }
 
     private void emitTemporarySegment() {
-        //If the current model cannot represent the data points in the buffer we have to use the fallback model
+        //The fallback model is used if the current model cannot represent the data points in the buffer
         Model modelToBeEmitted = this.currentModel;
         if (modelToBeEmitted.length() < this.buffer.size() ||
                 Float.isNaN(compressionRatio(modelToBeEmitted))) {
@@ -204,24 +205,24 @@ class SegmentGenerator {
             modelToBeEmitted.initialize(this.buffer);
         }
 
-        //The list of gaps are cloned to ensure that the values are kept alive
+        //The list of gaps are copied to ensure they do not change
         ArrayList<Integer> gaps = new ArrayList<>(this.gaps);
 
-        //A segment represented using the current model is constructed and emitted
-        emitSegment(this.temporaryStream, modelToBeEmitted , gaps);
+        //A segment containing the current model is constructed and emitted
+        emitSegment(this.temporaryStream, modelToBeEmitted, gaps);
 
         //DEBUG: all the debug counters can be updated as we have emitted a temporary segment
         this.logger.updateTemporarySegmentCounters(modelToBeEmitted, gaps.size());
     }
 
     private void emitFinalSegment() {
-        //From the entire list of models the model providing the best compression is selected as mcModel
+        //The model providing the best compression ratio is selected as mcModel
         Model mcModel = this.models[0];
         for (Model model : this.models) {
             mcModel = (compressionRatio(model) < compressionRatio(mcModel)) ? mcModel : model;
         }
 
-        //If no model have received enough data points to represent the segment all we can do is use the fallback model
+        //If none of the models has received enough data points to represent this sub-sequence, the fallback model is used
         int mcModelLength = mcModel.length();
         float mcModelCompressionRatio = compressionRatio(mcModel);
         if (Float.isNaN(mcModelCompressionRatio) || mcModelLength == 0) {
@@ -231,18 +232,21 @@ class SegmentGenerator {
             mcModelCompressionRatio = compressionRatio(mcModel);
         }
 
-        //The segment object of the model with the highest compression ratio is constructed and emitted
+        //A segment containing the model with the best compression ratio is constructed and emitted
         emitSegment(this.finalizedStream, mcModel, new ArrayList<>(this.gaps));
         this.buffer.subList(0, mcModelLength).clear();
 
-        //If the number of data points in the buffer is less then the current number of data points yet to emitted, some of the data
-        // points have already been emitted as part of the finalized segment, and we wait until new unseen data points have arrived.
+        //If the number of data points in the buffer is less then the number of data points that has yet to be
+        // emitted, then some of these data points have already been emitted as part of the finalized segment
         this.yetEmitted = Math.min(this.yetEmitted, buffer.size());
 
-        //DEBUG: all the debug counters can be updated as we have emitted a finalized segment
+        //The best model is stored as it's error function is used when computing the split/join heuristics
+        this.lastMCModel = mcModel;
+
+        //DEBUG: all the debug counters are updated based on the emitted finalized segment
         this.logger.updateFinalizedSegmentCounters(mcModel, this.gaps.size());
 
-        //Based on the compression ratio of the segment and/or if the time series have changed it might beneficial to split or join
+        //If the time series have changed it might beneficial to split or join them
         boolean compressionRatioIsBelowAverage = checkIfBelowAndUpdateAverage(mcModelCompressionRatio);
         if ( ! this.buffer.isEmpty() && this.buffer.get(0).length > 1 && compressionRatioIsBelowAverage ) {
             splitIfNotCorrelated();
@@ -280,7 +284,7 @@ class SegmentGenerator {
     }
 
     private void splitIfNotCorrelated() {
-        //If only a subset of a group is currently correlated the group is temporarily split into multiple subsets
+        //If only a subset of a group is currently correlated the group is temporarily split into multiple groups
         DataPoint[] bufferHead = this.buffer.get(0);
         float doubleErrorBound = 2 * this.fallbackModel.error;
         int lengthOfDataPointsInBuffer = bufferHead.length;
@@ -293,32 +297,30 @@ class SegmentGenerator {
             ArrayList<Integer> timeSeriesSplitIndexes = new ArrayList<>();
 
             for (Integer j : timeSeriesWithoutGaps) {
-                //Comparing the time series to itself always return true
+                //Comparing a time series to itself should always return true
                 if (i == j) {
                     bufferSplitIndexes.add(i);
                     timeSeriesSplitIndexes.add(Arrays.binarySearch(tsSids, bufferHead[i].sid));
                     continue;
                 }
 
-                boolean allDataPointsWithinDoubleErrorBound = true;
-                for (DataPoint[] dps : this.buffer) {
-                    DataPoint dp1 = dps[i];
-                    DataPoint dp2 = dps[j];
-                    allDataPointsWithinDoubleErrorBound &= Static.percentageError(dp1.value, dp2.value) < doubleErrorBound;
-                }
+                //The splitIfNotCorrelated method is only executed if the buffer contains data points
+                boolean allDataPointsWithinDoubleErrorBound = lastMCModel.withinErrorBound(doubleErrorBound,
+                        this.buffer.stream().map(dps -> dps[i]).iterator(),
+                        this.buffer.stream().map(dps -> dps[j]).iterator());
 
-                //If all elements of i and j are correlated they should be combined into a single split
+                //Time series should be ingested together if all of their data point are within the double error bound
                 if (allDataPointsWithinDoubleErrorBound) {
                     bufferSplitIndexes.add(j);
                     timeSeriesSplitIndexes.add(Arrays.binarySearch(tsSids, bufferHead[j].sid));
                 }
             }
-            //If the size of this split is the number of the time series not currently in a gap, no split is required
+            //If the size of the split is the number of the time series not currently in a gap, no split is required
             if (bufferSplitIndexes.size() == lengthOfDataPointsInBuffer) {
                 return;
             }
 
-            //Only time series that currently do not have a gap can be grouped together as they have comparable data points
+            //Only time series that currently are not in a gap can be grouped together as they have data points buffered
             timeSeriesWithoutGaps.removeAll(bufferSplitIndexes);
             HashSet<Integer> gaps = new HashSet<>(this.sids);
             bufferSplitIndexes.forEach(index -> gaps.remove(this.buffer.get(0)[index].sid));
@@ -328,9 +330,9 @@ class SegmentGenerator {
         }
 
         //If the number of time series with data points in the buffer is smaller than the size of the group, than some
-        // time series in the group are in a gap and these series are grouped together as we have no knowledge about them
+        // of the time series in the group are in a gap and are grouped together as we have no knowledge about them
         if (lengthOfDataPointsInBuffer != this.timeSeriesGroup.getTimeSeries().length) {
-            int[] timeSeriesSplitIndex =  //If a gap's sid is not in this group it is part of another split
+            int[] timeSeriesSplitIndex = //If a gap's sid is not in this group it is part of another split
                     this.gaps.stream().mapToInt(sid -> Arrays.binarySearch(tsSids, sid)).filter(k -> k >= 0).toArray();
             Arrays.sort(timeSeriesSplitIndex); //This.gaps is a set so sorting is required
             splitSegmentGenerator(new int[0], timeSeriesSplitIndex, new HashSet<>(this.sids));
@@ -360,8 +362,8 @@ class SegmentGenerator {
         }
         this.splitSegmentGenerators.add(sg);
 
-        //As the current temporary segment is shared with the parent segment generator, a new temporary segment is
-        // emitted for each split generator so the temporary segment can be updated separately foreach generator.
+        //As the current temporary segment is shared with the parent SegmentGenerator, a new temporary segment is
+        // emitted for each split generator so the temporary segment can be updated separately for each generator
         if (this.latency > 0) {
             this.yetEmitted = 0;
             sg.emitTemporarySegment();
@@ -369,12 +371,12 @@ class SegmentGenerator {
     }
 
     private ArrayList<DataPoint[]> copyBuffer(ArrayList<DataPoint[]> buffer, int[] bufferSplitIndex) {
-        //Time series with an active gap does not have data points in the buffer
+        //No data points are buffered for time series currently in a gap
         if (bufferSplitIndex.length == 0) {
             return new ArrayList<>();
         }
 
-        //Add all data points for the split time series without gaps to the new buffer
+        //Copies all data points for the split time series to the new buffer
         ArrayList<DataPoint[]> newBuffer = new ArrayList<>(buffer.size());
         for (DataPoint[] dps : buffer) {
             DataPoint[] newDps = new DataPoint[bufferSplitIndex.length];
@@ -389,7 +391,7 @@ class SegmentGenerator {
     }
 
     private void joinIfCorrelated() {
-        //The assumption is that if the series were not correlated they would have been split so only [0] is checked
+        //Assumes that series which are not correlated would have been split, so only [0] is checked
         float doubleErrorBound = 2 * this.fallbackModel.error;
         HashSet<SegmentGenerator> markedForJoining = new HashSet<>();
         ArrayList<SegmentGenerator> joined = new ArrayList<>();
@@ -397,7 +399,7 @@ class SegmentGenerator {
             SegmentGenerator sgi = this.splitsToJoinIfCorrelated.iterator().next();
             HashSet<SegmentGenerator> toBeJoined = new HashSet<>();
 
-            //If all data points with a shared time stamp is within the double error bound the series are joined
+            //If all data points with a shared time stamp is within the double error bound the groups are joined
             int shortestSharedBufferLength = Integer.MAX_VALUE;
             for (SegmentGenerator sgj : this.splitSegmentGenerators) {
                 //Comparing the time series group to itself always return true
@@ -408,38 +410,31 @@ class SegmentGenerator {
                     continue;
                 }
 
-                //Each time series group cannot be joined with a group more than once
+                //A time series group cannot be joined with another group more than once
                 if (markedForJoining.contains(sgj)) {
                     continue;
                 }
 
+                //If no data points are buffered it is not possible to check if the time series should be joined
                 int is = sgi.buffer.size();
                 int js = sgj.buffer.size();
-                boolean dataPointsWithinDoubleErrorBound = is > 0 && js > 0;
+                boolean canBeJoined = is > 0 && js > 0 &&
+                        sgi.buffer.get(is - 1)[0].timestamp == sgj.buffer.get(js - 1)[0].timestamp;
 
-                //Gaps can prevent the current segment from having equal end time and the time series possible to join
-                if (dataPointsWithinDoubleErrorBound &&
-                        sgi.buffer.get(is - 1)[0].timestamp != sgj.buffer.get(js - 1)[0].timestamp) {
-                    continue;
-                }
+                //The time series are joined if their data points with equal time stamps are within twice the error bound
+                canBeJoined &= lastMCModel.withinErrorBound(doubleErrorBound,
+                        new ReverseBufferIterator(sgi.buffer, 0), new ReverseBufferIterator(sgj.buffer, 0));
 
-                //If all data points of the shortest buffer are within two the error buffer of the other they are joined
-                int next = 1;
-                for (; is - next >= 0 && js - next >= 0; next++) {
-                    DataPoint[] dpi = sgi.buffer.get(is - next);
-                    DataPoint[] dpj = sgj.buffer.get(js - next);
-                    dataPointsWithinDoubleErrorBound &= Static.percentageError(dpi[0].value, dpj[0].value) < doubleErrorBound;
-                }
-
-                if (dataPointsWithinDoubleErrorBound) {
-                    shortestSharedBufferLength = Math.min(shortestSharedBufferLength, next);
+                if (canBeJoined) {
+                    int shortestBufferLength = Math.min(sgi.buffer.size(), sgj.buffer.size());
+                    shortestSharedBufferLength = Math.min(shortestSharedBufferLength, shortestBufferLength);
                     toBeJoined.add(sgj);
                     markedForJoining.add(sgj);
                     this.splitsToJoinIfCorrelated.remove(sgj);
                 }
             }
 
-            //If the join set contains more than one segment generators they are joined together
+            //If the join set contains more than one SegmentGenerator they are joined together
             if (toBeJoined.size() > 1) {
                 joinSegmentGenerator(toBeJoined, shortestSharedBufferLength, joined);
                 //HACK: a SegmentGenerator might add itself to the splitsToJoinIfCorrelated list while being joined
@@ -458,7 +453,7 @@ class SegmentGenerator {
             for (TimeSeries ts : sg.timeSeriesGroup.getTimeSeries()) {
                 totalJoinIndexList.add(ts.sid);
 
-                //Segment generators store the sid for all time series it controls for which a gap is currently active
+                //Segment generators store the sid for all time series it controls currently in a gap
                 if ( ! sg.gaps.contains(ts.sid)) {
                     activeJoinIndexList.add(ts.sid);
                 }
@@ -473,7 +468,7 @@ class SegmentGenerator {
         Set<TimeSeriesGroup> tsgs = sgs.stream().map(sg -> sg.timeSeriesGroup).collect(Collectors.toSet());
         TimeSeriesGroup tsg = new TimeSeriesGroup(tsgs, totalJoinIndex);
 
-        //If the original group is recreated the master segment generator is used, otherwise a new segment generator is created
+        //If the original group is recreated the master SegmentGenerator is used, otherwise a new one is created
         SegmentGenerator nsg = null;
         if (this.sids.size() == tsg.getTimeSeries().length) {
             nsg = this;
@@ -488,8 +483,8 @@ class SegmentGenerator {
         }
         this.splitSegmentGenerators.removeAll(sgs);
 
-        //The overlapping data points are moved to nsg before the old segment generators are flushed
-        for (int next = 1; next < shortestSharedBufferLength; next++) {
+        //The overlapping data points are moved to nsg before the old SegmentGenerators are flushed
+        for (int next = 1; next <= shortestSharedBufferLength; next++) {
             DataPoint[] result = new DataPoint[activeJoinIndex.length];
             for (SegmentGenerator sg : sgs) {
                 DataPoint[] dps = sg.buffer.get(sg.buffer.size() - next);
@@ -502,7 +497,7 @@ class SegmentGenerator {
         }
         Collections.reverse(nsg.buffer);
 
-        //The remaining data points stored by each segment generator is flushed so all time series given to nsg overlap
+        //The remaining data points stored by each SegmentGenerator are flushed
         for (SegmentGenerator sg : sgs) {
             int size = sg.buffer.size();
             sg.buffer.subList(size - nsg.buffer.size(), size).clear();
@@ -523,18 +518,18 @@ class SegmentGenerator {
         Arrays.stream(nsg.buffer.get(0)).forEach(dp -> gaps.remove(dp.sid));
         nsg.gaps = gaps;
 
-        //Initialize the first model with the content in the new combined buffer
+        //Initializes the first model with the content in the new combined buffer
         nsg.resetModelIndex();
 
         //As multiple temporary segments currently represent values for the new combined group, a new temporary segment
-        // is emitted so the existing temporary segments can be overwritten by a one temporary segment from nsg.
+        // is emitted so the existing temporary segments can be overwritten by one temporary segment from nsg
         if (this.latency > 0) {
             nsg.emitTemporarySegment();
         }
     }
 
     /** Instance Variables **/
-    //Variables from object constructor
+    //Variables from the constructor
     private final int gid;
     private final int latency;
     private final int resolution;
@@ -545,7 +540,7 @@ class SegmentGenerator {
     private final SegmentFunction finalizedStream;
     private final SegmentFunction temporaryStream;
 
-    //State variables for the latest data points
+    //State variables for buffering data points
     private Set<Integer> gaps;
     private ArrayList<DataPoint[]> buffer;
     private long[] prevTimeStamps;
@@ -563,6 +558,7 @@ class SegmentGenerator {
     private int modelIndex;
     private int yetEmitted;
     private Model currentModel;
+    private Model lastMCModel;
 
     //DEBUG: logger instance, for counting segments, used for this generator
     Logger logger;

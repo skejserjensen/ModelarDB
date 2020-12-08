@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -96,7 +96,7 @@ class MinS extends UserDefinedAggregateFunction {
     }
   }
 
-  /* Instance Variables */
+  /** Instance Variables **/
   protected val rowToSegment: Row => Segment = SparkGridder.getRowToSegment
   protected val scalingCache: Array[Float] = Spark.getStorage.getSourceScalingFactorCache
 }
@@ -143,7 +143,7 @@ class MaxS extends UserDefinedAggregateFunction {
     }
   }
 
-  /* Instance Variables */
+  /** Instance Variables **/
   protected val rowToSegment: Row => Segment = SparkGridder.getRowToSegment
   protected val scalingCache: Array[Float] = Spark.getStorage.getSourceScalingFactorCache
 }
@@ -194,7 +194,7 @@ class SumS extends UserDefinedAggregateFunction {
     }
   }
 
-  /* Instance Variables */
+  /** Instance Variables **/
   protected val rowToSegment: Row => Segment = SparkGridder.getRowToSegment
   protected val scalingCache: Array[Float] = Spark.getStorage.getSourceScalingFactorCache
 }
@@ -248,7 +248,7 @@ class AvgS extends UserDefinedAggregateFunction {
     }
   }
 
-  /* Instance Variables */
+  /** Instance Variables **/
   protected val rowToSegment: Row => Segment = SparkGridder.getRowToSegment
   protected val scalingCache: Array[Float] = Spark.getStorage.getSourceScalingFactorCache
 }
@@ -265,9 +265,9 @@ class AvgSS extends AvgS {
   }
 }
 
-//Implementation of multi-dimensional user-defined aggregate functions on top of the segment view
-//Cube
-abstract class Cube(val size: Int) extends UserDefinedAggregateFunction {
+//Implementation of user-defined aggregate functions in the time dimension on top of the segment view
+//TimeUDAF
+abstract class TimeUDAF(val size: Int) extends UserDefinedAggregateFunction {
 
   /** Public Methods **/
   override def initialize(buffer: MutableAggregationBuffer): Unit = buffer(0) = Array.fill(size){this.default}
@@ -296,7 +296,7 @@ abstract class Cube(val size: Int) extends UserDefinedAggregateFunction {
     buffer1(0) = result1
   }
 
-  /* Instance Variables */
+  /** Instance Variables **/
   protected val rowToSegment: Row => Segment = SparkGridder.getRowToSegment
   protected val calendar: Calendar = Calendar.getInstance()
 
@@ -307,7 +307,7 @@ abstract class Cube(val size: Int) extends UserDefinedAggregateFunction {
   protected val scalingCache: Array[Float] = Spark.getStorage.getSourceScalingFactorCache
 }
 
-class CubeCount(override val level: Int, override val size: Int) extends Cube(size) {
+class TimeCount(override val level: Int, override val size: Int) extends TimeUDAF(size) {
 
   /** Public Methods **/
   override def dataType: DataType = MapType(IntegerType, LongType, valueContainsNull = false)
@@ -331,7 +331,7 @@ class CubeCount(override val level: Int, override val size: Int) extends Cube(si
   protected val default: Double = 0.0
 }
 
-class CubeMin(override val level: Int, override val size: Int) extends Cube(size) {
+class TimeMin(override val level: Int, override val size: Int) extends TimeUDAF(size) {
 
   /** Public Methods **/
   override def dataType: DataType = MapType(IntegerType, FloatType, valueContainsNull = false)
@@ -364,7 +364,7 @@ class CubeMin(override val level: Int, override val size: Int) extends Cube(size
   protected val default: Double = Double.PositiveInfinity
 }
 
-class CubeMax(override val level: Int, override val size: Int) extends Cube(size) {
+class TimeMax(override val level: Int, override val size: Int) extends TimeUDAF(size) {
 
   /** Public Methods **/
   override def dataType: DataType = MapType(IntegerType, FloatType, valueContainsNull = false)
@@ -397,7 +397,7 @@ class CubeMax(override val level: Int, override val size: Int) extends Cube(size
   protected val default: Double = Double.NegativeInfinity
 }
 
-class CubeSum(override val level: Int, override val size: Int) extends Cube(size) {
+class TimeSum(override val level: Int, override val size: Int) extends TimeUDAF(size) {
 
   /** Public Methods **/
   override protected val aggregate: CubeFunction = new CubeFunction {
@@ -426,7 +426,7 @@ class CubeSum(override val level: Int, override val size: Int) extends Cube(size
   protected val default: Double = 0.0
 }
 
-class CubeAvg(override val level: Int, override val size: Int) extends Cube(size) {
+class TimeAvg(override val level: Int, override val size: Int) extends TimeUDAF(size) {
 
   /** Public Methods **/
   override protected val aggregate: CubeFunction = new CubeFunction {
@@ -472,47 +472,47 @@ object SparkUDAF {
     spark.sqlContext.udf.register("AVG_SS", new AvgSS)
 
     //Some useful aggregates cannot be performed as DateUtils3 cannot round some fields
-    //A realistic upper bound of the year 2500 is set for CUBE_*_YEAR to preserve memory
-    spark.sqlContext.udf.register("CUBE_COUNT_YEAR", new CubeCount(1, 2501))
-    spark.sqlContext.udf.register("CUBE_COUNT_MONTH", new CubeCount(2, 13))
-    spark.sqlContext.udf.register("CUBE_COUNT_DAY_OF_MONTH", new CubeCount(5, 32))
-    spark.sqlContext.udf.register("CUBE_COUNT_AM_PM", new CubeCount(9, 3))
-    spark.sqlContext.udf.register("CUBE_COUNT_HOUR", new CubeCount(10, 25))
-    spark.sqlContext.udf.register("CUBE_COUNT_HOUR_OF_DAY", new CubeCount(11, 25))
-    spark.sqlContext.udf.register("CUBE_COUNT_MINUTE", new CubeCount(12, 61))
-    spark.sqlContext.udf.register("CUBE_COUNT_SECOND", new CubeCount(13, 61))
-    spark.sqlContext.udf.register("CUBE_MIN_YEAR", new CubeMin(1, 2501))
-    spark.sqlContext.udf.register("CUBE_MIN_MONTH", new CubeMin(2, 13))
-    spark.sqlContext.udf.register("CUBE_MIN_DAY_OF_MONTH", new CubeMin(5, 32))
-    spark.sqlContext.udf.register("CUBE_MIN_AM_PM", new CubeMin(9, 3))
-    spark.sqlContext.udf.register("CUBE_MIN_HOUR", new CubeMin(10, 25))
-    spark.sqlContext.udf.register("CUBE_MIN_HOUR_OF_DAY", new CubeMin(11, 25))
-    spark.sqlContext.udf.register("CUBE_MIN_MINUTE", new CubeMin(12, 61))
-    spark.sqlContext.udf.register("CUBE_MIN_SECOND", new CubeMin(13, 61))
-    spark.sqlContext.udf.register("CUBE_MAX_YEAR", new CubeMax(1, 2501))
-    spark.sqlContext.udf.register("CUBE_MAX_MONTH", new CubeMax(2, 13))
-    spark.sqlContext.udf.register("CUBE_MAX_DAY_OF_MONTH", new CubeMax(5, 32))
-    spark.sqlContext.udf.register("CUBE_MAX_AM_PM", new CubeMax(9, 3))
-    spark.sqlContext.udf.register("CUBE_MAX_HOUR", new CubeMax(10, 25))
-    spark.sqlContext.udf.register("CUBE_MAX_HOUR_OF_DAY", new CubeMax(11, 25))
-    spark.sqlContext.udf.register("CUBE_MAX_MINUTE", new CubeMax(12, 61))
-    spark.sqlContext.udf.register("CUBE_MAX_SECOND", new CubeMax(13, 61))
-    spark.sqlContext.udf.register("CUBE_SUM_YEAR", new CubeSum(1, 5002))
-    spark.sqlContext.udf.register("CUBE_SUM_MONTH", new CubeSum(2, 26))
-    spark.sqlContext.udf.register("CUBE_SUM_DAY_OF_MONTH", new CubeSum(5, 64))
-    spark.sqlContext.udf.register("CUBE_SUM_AM_PM", new CubeSum(9, 6))
-    spark.sqlContext.udf.register("CUBE_SUM_HOUR", new CubeSum(10, 50))
-    spark.sqlContext.udf.register("CUBE_SUM_HOUR_OF_DAY", new CubeSum(11, 50))
-    spark.sqlContext.udf.register("CUBE_SUM_MINUTE", new CubeSum(12, 122))
-    spark.sqlContext.udf.register("CUBE_SUM_SECOND", new CubeSum(13, 122))
-    spark.sqlContext.udf.register("CUBE_AVG_YEAR", new CubeAvg(1, 5002))
-    spark.sqlContext.udf.register("CUBE_AVG_MONTH", new CubeAvg(2, 26))
-    spark.sqlContext.udf.register("CUBE_AVG_DAY_OF_MONTH", new CubeAvg(5, 64))
-    spark.sqlContext.udf.register("CUBE_AVG_AM_PM", new CubeAvg(9, 6))
-    spark.sqlContext.udf.register("CUBE_AVG_HOUR", new CubeAvg(10, 50))
-    spark.sqlContext.udf.register("CUBE_AVG_HOUR_OF_DAY", new CubeAvg(11, 50))
-    spark.sqlContext.udf.register("CUBE_AVG_MINUTE", new CubeAvg(12, 122))
-    spark.sqlContext.udf.register("CUBE_AVG_SECOND", new CubeAvg(13, 122))
+    //A somewhat realistic upper bound of the year 2500 is set for *_YEAR to preserve memory
+    spark.sqlContext.udf.register("COUNT_YEAR", new TimeCount(1, 2501))
+    spark.sqlContext.udf.register("COUNT_MONTH", new TimeCount(2, 13))
+    spark.sqlContext.udf.register("COUNT_DAY_OF_MONTH", new TimeCount(5, 32))
+    spark.sqlContext.udf.register("COUNT_AM_PM", new TimeCount(9, 3))
+    spark.sqlContext.udf.register("COUNT_HOUR", new TimeCount(10, 25))
+    spark.sqlContext.udf.register("COUNT_HOUR_OF_DAY", new TimeCount(11, 25))
+    spark.sqlContext.udf.register("COUNT_MINUTE", new TimeCount(12, 61))
+    spark.sqlContext.udf.register("COUNT_SECOND", new TimeCount(13, 61))
+    spark.sqlContext.udf.register("MIN_YEAR", new TimeMin(1, 2501))
+    spark.sqlContext.udf.register("MIN_MONTH", new TimeMin(2, 13))
+    spark.sqlContext.udf.register("MIN_DAY_OF_MONTH", new TimeMin(5, 32))
+    spark.sqlContext.udf.register("MIN_AM_PM", new TimeMin(9, 3))
+    spark.sqlContext.udf.register("MIN_HOUR", new TimeMin(10, 25))
+    spark.sqlContext.udf.register("MIN_HOUR_OF_DAY", new TimeMin(11, 25))
+    spark.sqlContext.udf.register("MIN_MINUTE", new TimeMin(12, 61))
+    spark.sqlContext.udf.register("MIN_SECOND", new TimeMin(13, 61))
+    spark.sqlContext.udf.register("MAX_YEAR", new TimeMax(1, 2501))
+    spark.sqlContext.udf.register("MAX_MONTH", new TimeMax(2, 13))
+    spark.sqlContext.udf.register("MAX_DAY_OF_MONTH", new TimeMax(5, 32))
+    spark.sqlContext.udf.register("MAX_AM_PM", new TimeMax(9, 3))
+    spark.sqlContext.udf.register("MAX_HOUR", new TimeMax(10, 25))
+    spark.sqlContext.udf.register("MAX_HOUR_OF_DAY", new TimeMax(11, 25))
+    spark.sqlContext.udf.register("MAX_MINUTE", new TimeMax(12, 61))
+    spark.sqlContext.udf.register("MAX_SECOND", new TimeMax(13, 61))
+    spark.sqlContext.udf.register("SUM_YEAR", new TimeSum(1, 5002))
+    spark.sqlContext.udf.register("SUM_MONTH", new TimeSum(2, 26))
+    spark.sqlContext.udf.register("SUM_DAY_OF_MONTH", new TimeSum(5, 64))
+    spark.sqlContext.udf.register("SUM_AM_PM", new TimeSum(9, 6))
+    spark.sqlContext.udf.register("SUM_HOUR", new TimeSum(10, 50))
+    spark.sqlContext.udf.register("SUM_HOUR_OF_DAY", new TimeSum(11, 50))
+    spark.sqlContext.udf.register("SUM_MINUTE", new TimeSum(12, 122))
+    spark.sqlContext.udf.register("SUM_SECOND", new TimeSum(13, 122))
+    spark.sqlContext.udf.register("AVG_YEAR", new TimeAvg(1, 5002))
+    spark.sqlContext.udf.register("AVG_MONTH", new TimeAvg(2, 26))
+    spark.sqlContext.udf.register("AVG_DAY_OF_MONTH", new TimeAvg(5, 64))
+    spark.sqlContext.udf.register("AVG_AM_PM", new TimeAvg(9, 6))
+    spark.sqlContext.udf.register("AVG_HOUR", new TimeAvg(10, 50))
+    spark.sqlContext.udf.register("AVG_HOUR_OF_DAY", new TimeAvg(11, 50))
+    spark.sqlContext.udf.register("AVG_MINUTE", new TimeAvg(12, 122))
+    spark.sqlContext.udf.register("AVG_SECOND", new TimeAvg(13, 122))
 
     spark.sqlContext.udf.register("START", start _)
     spark.sqlContext.udf.register("END", end _)

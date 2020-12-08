@@ -14,17 +14,33 @@
  */
 package dk.aau.modelardb.core.utility;
 
-import java.io.Serializable;
+import dk.aau.modelardb.core.DataPoint;
 
-public class Pair<T, U> implements Serializable {
+import java.util.Iterator;
+import java.util.ArrayList;
+
+public class ReverseBufferIterator implements Iterator<DataPoint> {
 
     /** Constructors **/
-    public Pair(T _1, U _2) {
-        this._1 = _1;
-        this._2 = _2;
+    public ReverseBufferIterator(ArrayList<DataPoint[]> list, int source) {
+        this.index = list.size();
+        this.list = list;
+        this.source = source;
+    }
+
+    @Override
+    public boolean hasNext() {
+        return this.index > 0;
+    }
+
+    @Override
+    public DataPoint next() {
+        this.index -= 1;
+        return this.list.get(this.index)[source];
     }
 
     /** Instance Variables **/
-    public T _1;
-    public U _2;
+    private int source;
+    private int index;
+    private ArrayList<DataPoint[]> list;
 }

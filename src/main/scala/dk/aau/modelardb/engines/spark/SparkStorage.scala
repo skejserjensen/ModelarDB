@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,12 +20,12 @@ import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.{Row, SparkSession}
 
 trait SparkStorage {
-  //Opens a connection to storage with Apache Spark integration
+  //Opens a connection to a segment group store with Spark integration
   def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession
 
-  //Writes an RDD of segments to the underlying data store
+  //Writes an RDD of segments to the segment group store
   def writeRDD(rdd: RDD[Row]): Unit
 
-  //Retrieves an RDD of segments from the underlying data source
+  //Reads an RDD of segments from the segment group store
   def getRDD(filters: Array[Filter]): RDD[Row]
 }

@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,12 +57,12 @@ public abstract class Segment implements Serializable {
     }
 
     public int length() {
-        //Computes the number of data points represented by this segment per time series
+        //Computes the number of data points represented by this segment
         return (int) ((this.endTime - this.startTime) / this.resolution) + 1;
     }
 
     public int capacity() {
-        //Computes the full length of the entire group even if the segment is restricted by a new start time
+        //Computes the full length of the entire segment even if it is restricted by a new start time
         //Offsets is: [0] Group Offset, [1] Group Size, [2] Temporal Offset computed by Start()
         int currentLength = this.offsets[1] * this.length();
         if (this.offsets.length == 3) {
@@ -96,8 +96,8 @@ public abstract class Segment implements Serializable {
     }
 
     public Stream<DataPoint> grid() {
-        //If the segment have been restricted by start time the data points should be returned from an offset
-        // Offsets store the following offsets: [0] Group Offset, [1] Group Size, [2] Temporal Offset computed by Start()
+        //If the segment have been restricted by start time the data points should be returned from an offset,
+        // offsets store the following offsets: [0] Group Offset, [1] Group Size, [2] Temporal Offset computed by Start()
         int groupOffset = this.offsets[0] - 1;
         int groupSize = this.offsets[1];
         int temporalOffset = this.offsets[2];
@@ -132,13 +132,6 @@ public abstract class Segment implements Serializable {
         this.endTime = calendar.getTimeInMillis() - this.resolution;
         calendar.setTimeInMillis(this.startTime);
         int field = calendar.get(type);
-
-        //If the new end time is after the original end time, the segment is shorter than that level in the time dimension
-        if (originalEndTime <= this.endTime) {
-            this.endTime = originalEndTime;
-            aggregator.aggregate(this, this.sid, field, result);
-            return result;
-        }
 
         //For each time interval until the original end time the specified aggregate is computed and stored in result
         calendar = DateUtils.ceiling(calendar, type);

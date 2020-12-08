@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ object EngineFactory {
 
   /** Private Methods **/
   private def startLocal(storage: Storage, models: Array[String], batchSize: Int): Unit = {
-    //Creates methods that drop temporary segments and store finalized segments in batches
+    //Creates a method that drops temporary segments and one that store finalized segments in batches
     val consumeTemporary = new SegmentFunction {
       override def emit(gid: Int, startTime: Long, endTime: Long, mid: Int, parameters: Array[Byte], gaps: Array[Byte]): Unit = ()
     }

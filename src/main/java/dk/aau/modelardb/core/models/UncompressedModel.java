@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ class UncompressedModel extends Model {
         if (this.currentSize == 0) {
             return Float.NaN;
         } else {
-            //The model store each value as floats which require 4 bytes for each
+            //The model stores each value as a float, which requires four bytes for each
             return 4.0F * this.currentSize;
         }
     }

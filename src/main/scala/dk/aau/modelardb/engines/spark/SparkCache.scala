@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
   def update(microBatch: RDD[Row]): Unit = {
     this.cacheLock.writeLock().lock()
 
-    //Updates the cache of temporary segments (these are marked as false in column seven)
+    //Updates the cache of temporary segments (they are marked as false in column seven)
     this.temporaryRDD = this.temporaryRDD.multiputRDD(
       microBatch.map(row => (row.getInt(0), Array(row))),
       (_, r1: Array[Row], r2: Array[Row]) => updateTemporarySegment(r1, r2))
@@ -44,13 +44,12 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
       flush()
     }
 
-    //All data in the ingestion cache are persisted so the linage is only traversed once
+    //All data in the ingestion cache are persisted so the linage is only traversed one more time
     this.temporaryRDD = checkpointOrPersist(this.temporaryRDD)
     this.finalizedRDD.persist()
     this.ingestedRDD.unpersist()
-    this.ingestedRDD = spark.sparkContext.union(finalizedRDD, temporaryRDD.values.flatMap(rows => rows))
+    this.ingestedRDD = spark.sparkContext.union(this.finalizedRDD, this.temporaryRDD.values.flatMap(rows => rows))
     this.ingestedRDD.persist()
-
     this.cacheLock.writeLock().unlock()
   }
 
@@ -58,20 +57,62 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
     this.cacheLock.writeLock().lock()
     Static.info("ModelarDB: flushing in-memory cache")
 
-    //The flush method must be atomic to prevent duplicate segments being read from
-    // the disk and finalizedRDD when a query is issued while the system is ingesting
+    //The flush method must be atomic to prevent duplicate segments being read from both
+    // the disk and the finalizedRDD if a query is issued while the system is ingesting
     write(this.finalizedRDD)
 
     //The cache is now invalid and must be cleared to ensure queries are correct
     this.finalizedRDD.unpersist()
     this.finalizedRDD = this.emptyRDD
     this.storageCacheRDD.unpersist()
-    this.storageCacheKey = Array()
+    this.storageCacheKey = Array(null)
 
+    //A ReentrantReadWriteLock cannot be upgraded, so a reader must be informed that a flush occurred
+    // between it releasing its read lock and getting a write lock. A counter is used instead of a flag
+    // so two writes cannot reset the flag for a reader: Unlock Read -> Writer -> Writer -> Lock Write
+    this.lastFlush += 1
     this.cacheLock.writeLock().unlock()
   }
 
-  def write(microBatch: RDD[Row]): Unit = {
+  def getSegmentGroupRDD(filters: Array[Filter]): RDD[Row] = {
+    //Multiple readers must be allowed to support execution of multiple queries in parallel
+    this.cacheLock.readLock().lock()
+
+    //If the rows required from storage matches the contents of the cache, we return the cached rows
+    if (filters.sameElements(this.storageCacheKey)) {
+      Static.info("ModelarDB: cache hit")
+      val segmentRDD = spark.sparkContext.union(this.storageCacheRDD, this.ingestedRDD)
+      this.cacheLock.readLock().unlock()
+      return segmentRDD
+    }
+
+    //The segment RDD cannot be constructed while update() or flush() is running
+    // as some segments then might be read from both the disk and finalizedRDD
+    Static.info("ModelarDB: cache miss")
+    val storageRDD = getStorageRDDFromDisk(filters)
+    val segmentRDD = spark.sparkContext.union(storageRDD, this.ingestedRDD)
+    val lastFlush = this.lastFlush
+    this.cacheLock.readLock().unlock()
+
+    //Large data sets are not cached in memory to prevent spilling to disk, and as
+    // ReentrantReadWriteLock cannot be upgraded we check if a flush have occurred
+    if (Spark.isDataSetSmall(storageRDD)) {
+      this.cacheLock.writeLock().lock()
+      if (lastFlush == this.lastFlush) {
+        Static.info("ModelarDB: caching RDD")
+        this.storageCacheRDD.unpersist()
+        this.storageCacheKey = filters
+        this.storageCacheRDD = storageRDD
+        this.storageCacheRDD.persist()
+      }
+      this.cacheLock.writeLock().unlock()
+    }
+    segmentRDD
+  }
+
+  /** Private[spark] Methods **/
+  private[spark] def write(microBatch: RDD[Row]): Unit = {
+    //This method is not completely private so Spark can write RDDs directly to storage when bulk-loading
     val ss = Spark.getSparkStorage
     if (ss == null) {
       val groups = microBatch.collect.map(row => new SegmentGroup(row.getInt(0), row.getTimestamp(1).getTime,
@@ -80,36 +121,6 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
     } else {
       ss.writeRDD(microBatch)
     }
-  }
-
-  def getSegmentGroupRDD(filters: Array[Filter]): RDD[Row] = {
-    //If the rows required matches the contents of the cache we return
-    this.cacheLock.readLock().lock()
-    if (filters.sameElements(this.storageCacheKey)) {
-      Static.info("ModelarDB: cache hit")
-      val segmentRDD = spark.sparkContext.union(this.storageCacheRDD, this.ingestedRDD)
-      this.cacheLock.readLock().unlock()
-      return segmentRDD
-    }
-
-    //The segment RDD cannot be constructed while the cache is being flushed,
-    // as some segments might be read from both the disk and finalizedRDD
-    Static.info("ModelarDB: cache miss")
-    val storageRDD = getStorageRDDFromDisk(filters)
-    val segmentRDD = spark.sparkContext.union(storageRDD, this.ingestedRDD)
-    this.cacheLock.readLock().unlock()
-
-    //Large data sets are not cached in memory to prevent spilling to disk
-    if (Spark.isDataSetSmall(storageRDD)) {
-      Static.info("ModelarDB: caching RDD")
-      this.cacheLock.writeLock().lock()
-      this.storageCacheRDD.unpersist()
-      this.storageCacheKey = filters
-      this.storageCacheRDD = storageRDD
-      this.storageCacheRDD.persist()
-      this.cacheLock.writeLock().unlock()
-    }
-    segmentRDD
   }
 
   /** Private Methods **/
@@ -125,7 +136,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
   }
 
   private def getIndexedRDD = {
-    //IndexedRDD is populated with empty arrays for each new gid so that the merge function is always executed
+    //The IndexedRDD is populated with empty arrays for each new gid so that the merge function is always executed
     val initialData: Array[(Int, Array[Row])] = if (newGids.isEmpty) {
       Array()
     } else {
@@ -137,7 +148,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
 
   private def checkpointOrPersist(indexedRDD: IndexedRDD[Int, Array[Row]]) = {
     if (checkpointCounter == 0) {
-      //HACK: allows IndexedRDDs to be checkpointed so linage can be cleared
+      //HACK: allows IndexedRDDs to be checkpointed so its linage can be cleared
       val checkpointableRDD = indexedRDD.mapPartitions(x => x)
       checkpointableRDD.localCheckpoint()
       checkpointCounter = 10
@@ -149,7 +160,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
   }
 
   private def updateTemporarySegment(buffer: Array[Row], input: Array[Row]): Array[Row] = {
-    //The gaps are extracted from the new finalized or temporary row
+    //The gaps are extracted from the new finalized or temporary segment
     val inputRow = input(0)
     val isTemporary = ! inputRow.getBoolean(6)
     val inputGaps = Static.bytesToInts(inputRow.getAs[Array[Byte]](5))
@@ -166,15 +177,15 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
       val gap = Static.bytesToInts(row.getAs[Array[Byte]](5))
       val ingested = group.toSet.diff(gap.toSet)
 
-      //Each existing temporary segment that represent values for the same time series as the new segment is updated
+      //Each existing temporary segment that contains values for the same time series as the new segment is updated
       if (ingested.intersect(inputIngested).nonEmpty) {
         if (isTemporary) {
           //A new temporary segment always represent newer data points than the previous temporary segment
           buffer(i) = inputRow
         } else {
-          //Moves the start time of the temporary segment to the data point after the finalized segment, if
+          //Moves the start time of the temporary segment to the data point right after the finalized segment, if
           // the new start time is after the end time of the temporary segment it can be dropped from the cache
-          buffer(i) = null //The current temporary segment is deleted if the finalized segment overlap
+          buffer(i) = null //The current temporary segment is deleted if it overlaps completely with the finalized segment
           val startTime = inputRow.getTimestamp(2).getTime + resolution
           if (startTime <= row.getTimestamp(2).getTime) {
             val newGaps = Static.intToBytes(gap :+ -((startTime - row.getTimestamp(1).getTime) / resolution).toInt)
@@ -187,10 +198,10 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
     }
 
     if (isTemporary && ! updatedExistingSegment) {
-      //If a split have occurred multiple segment will be used to represent what one did before so the new are appended
+      //A split has occurred and multiple segments now represent what one did before, so the new ones are appended
       buffer.filter(_ != null) ++ input
     } else {
-      //If a join have occurred one segment will represent what two did before so duplicates must be removed
+      //A join have occurred and one segment now represent what two did before, so duplicates must be removed
       buffer.filter(_ != null).distinct
     }
   }
@@ -200,6 +211,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
   private val emptyRDD = spark.sparkContext.emptyRDD[Row]
   private val groupMetadataCache = Spark.getStorage.getGroupMetadataCache
   private val cacheLock = new ReentrantReadWriteLock()
+  private var lastFlush = 0
 
   private var storageCacheKey: Array[Filter] = Array(null)
   private var storageCacheRDD = this.emptyRDD

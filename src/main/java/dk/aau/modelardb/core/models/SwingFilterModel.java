@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ class SwingFilterModel extends Model {
             return false;
         }
 
-        //Allows size to be be updated after adding the second data point without the need of branches
+        //Allows the size to be be updated after adding the second data point without the need of branches
         int currentSize = this.currentSize;
         int nextSize = this.currentSize + 1;
 
@@ -45,7 +45,8 @@ class SwingFilterModel extends Model {
             float min = Static.min(currentDataPoints);
             float max = Static.max(currentDataPoints);
             float avg = Static.avg(currentDataPoints);
-            if (outsidePercentageErrorBound(avg, min) || outsidePercentageErrorBound(avg, max)) {
+            if (Static.outsidePercentageErrorBound(this.error, avg, min) ||
+                    Static.outsidePercentageErrorBound(this.error, avg, max)) {
                 this.withinErrorBound = false;
                 return false;
             }
@@ -53,11 +54,11 @@ class SwingFilterModel extends Model {
             // Line 1 - 2
             this.initialDataPoint = new DataPoint(currentDataPoints[0].sid, currentDataPoints[0].timestamp, avg);
         } else {
-            //Expect for the first set of data point all data points can appended one at a time
+            //Expect for the first set of data point, all data points can be appended one at a time
             for (DataPoint currentDataPoint : currentDataPoints) {
                 //Calculates the absolute allowed deviation before the error bound is exceeded. In theory the deviation
-                // should be a calculated as the currentDataPoint.value * (this.error / 100.0)). However, due to the
-                // calculation not being completely accurate, 100.0 would allow data points slightly above the error.
+                // should be calculated as the Math.abs(currentDataPoint.value * (this.error / 100.0)). However, due to
+                // the calculation not being perfectly accurate, 100.0 allows data points slightly above the error bound
                 double deviation = Math.abs(currentDataPoint.value * (this.error / 100.1));
 
                 if (this.currentSize == 1) {
@@ -154,13 +155,13 @@ class SwingFilterModel extends Model {
             DataPoint[] dpa = dps.get(i);
             float approximation = (float) (a * dpa[0].timestamp + b);
             for (DataPoint dp : dpa) {
-                if (outsidePercentageErrorBound(approximation, dp.value)) {
+                if (Static.outsidePercentageErrorBound(this.error, approximation, dp.value)) {
                     return Float.NaN;
                 }
             }
         }
 
-        //Determines if we need to use doubles or if floats are enough for the parameters
+        //Determines if we need to use doubles or if floats are precise enough for the parameters
         if ((double) (float) a == a && (double) (float) b == b) {
             return 8.0F;
         } else if ((double) (float) a == a) {
@@ -185,7 +186,7 @@ class SwingFilterSegment extends Segment {
         super(sid, startTime, endTime, resolution, offsets);
         ByteBuffer arguments = ByteBuffer.wrap(parameters);
 
-        //Depending on the data being encoded the linear function might have required double precision floating-point
+        //Depending on the data being encoded, the linear function might have required double precision floating-point
         if (parameters.length == 16) {
             this.a = arguments.getDouble();
             this.b = arguments.getDouble();

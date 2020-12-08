@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package dk.aau.modelardb.engines.spark
 import dk.aau.modelardb.core.DataPoint
 import org.apache.spark.sql.Row
 
-//Abstract class that projections generated at run-time using the ToolBox APIs can derive from.
+//Abstract classes that projections generated at run-time using the ToolBox APIs can derive from
 abstract class SparkSegmentProjector extends Serializable {
   def project(row: Row, dmc: Array[Array[Object]]): Row
 }
@@ -81,12 +81,12 @@ object SparkProjection {
 
   /** Private Methods **/
   private def compileProjection(code: String): Any = {
-    //Imports the packages with the run-time information necessary to construct the toolbox
+    //Imports the packages required to construct the toolbox
     import scala.reflect.runtime.currentMirror
     import scala.tools.reflect.ToolBox
     val toolBox = currentMirror.mkToolBox()
 
-    //Parse and compile the code before constructing a projector object
+    //Parses and compiles the code before constructing a projector object
     val ast = toolBox.parse(code)
     val compiled = toolBox.compile(ast)
     compiled()

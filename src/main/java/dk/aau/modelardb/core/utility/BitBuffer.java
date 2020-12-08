@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,7 +75,7 @@ public class BitBuffer {
         boolean bit = ((this.currentByte >> (this.bitsLeft - 1)) & 1) == 1;
         this.bitsLeft--;
 
-        //If we reached the last bit the next byte is extracted
+        //If we reached the last bit the next byte is read
         if (this.bitsLeft == 0 && this.byteBuffer.hasRemaining()) {
             readNextByte();
         }
@@ -86,20 +86,20 @@ public class BitBuffer {
         int value = 0;
         while (bits > 0) {
             if (bits > this.bitsLeft || bits == Byte.SIZE) {
-                //Take only the bitsLeft least significant bits
+                //Reads only the bitsLeft least significant bits
                 byte d = (byte) (this.currentByte & ((1 << this.bitsLeft) - 1));
                 value = (value << this.bitsLeft) + (d & 0xFF);
                 bits -= this.bitsLeft;
                 this.bitsLeft = 0;
             } else {
-                //Shift to correct position and take only least significant bits
+                //Shifts to correct position and read only least significant bits
                 byte d = (byte) ((this.currentByte >>> (this.bitsLeft - bits)) & ((1 << bits) - 1));
                 value = (value << bits) + (d & 0xFF);
                 this.bitsLeft -= bits;
                 bits = 0;
             }
 
-            //The current byte have been exhausted and we move to the next
+            //The current byte has been exhausted and we move to the next
             if (this.bitsLeft == 0 && this.byteBuffer.hasRemaining()) {
                 readNextByte();
             }

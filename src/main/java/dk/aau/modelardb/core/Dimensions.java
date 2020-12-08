@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,12 +33,14 @@ public class Dimensions {
         for (String dimension : dimensions) {
             String[] split = dimension.trim().split(",");
 
-            //Checks if a weight have been provided for this dimensions
+            //The last element may be a weight but it is not guaranteed, however, as all members
+            // must have an associated type only the name and weight consist of a single element
             int numberOfColumns;
-            try {
-                weights.add(Double.parseDouble(split[split.length - 1]));
+            if ( ! split[split.length - 1].trim().contains(" ")) {
+                //The weight is stored as 1/W so a larger weight is better
+                weights.add(1.0 / Double.parseDouble(split[split.length - 1]));
                 numberOfColumns = split.length - 1;
-            } catch (NumberFormatException nfe) {
+            } else {
                 weights.add(1.0);
                 numberOfColumns = split.length;
             }
@@ -117,10 +119,16 @@ public class Dimensions {
         return sb.toString();
     }
 
+    public float getLowestNoneZeroDistance() {
+        float highestLevelCount = this.dims.entrySet().stream().mapToInt(dim ->
+                (dim.getValue()._2 - dim.getValue()._1 + 1)).max().getAsInt();
+        return (float) (1.0 / highestLevelCount / this.names.length);
+    }
+
     public boolean correlatedByLCALevels(TimeSeries[] tsgA, TimeSeries[] tsgB, HashMap<Integer, Integer> correlation) {
         //Ensures that dimensions are available before grouping
         if (this.names == null) {
-            throw new IllegalArgumentException("CORE: grouping by dimensions require a dimensions file");
+            throw new IllegalArgumentException("CORE: grouping by dimensions requires a dimensions file");
         }
 
         boolean correlated = true;
@@ -129,11 +137,9 @@ public class Dimensions {
             int correlationEnd = entry.getValue();
             int lca = this.getLowestCommonAncestorLevel(dimensionStart, correlationEnd, tsgA, tsgB);
 
-            //The LCA level is computed from 0 with 1 added for each level where the two groups share members
+            //The LCA level is computed starting from 0, and 1 is added for each level where the two groups share members
             correlated &= lca > (correlationEnd - dimensionStart);
         }
-
-        //The time series groups are correlated if they share members until the provided level in the hierarchy
         return correlated;
     }
 
@@ -148,12 +154,12 @@ public class Dimensions {
             String dimension = this.names[i];
             Pair<Integer, Integer> se = this.dims.get(dimension);
 
-            //The LCA level is computed from 0 with 1 added for each level where the two groups share members
+            //The LCA level is computed starting from 0, and 1 is added for each level where the two groups share members
             int lca = this.getLowestCommonAncestorLevel(se._1, se._2, tsgA, tsgB);
 
-            //The distance between dimensions are computed as: (length - LCA level) / length
+            //The distance between dimensions is computed as: (length - LCA level) / length
             double length = se._2 - se._1 + 1.0;
-            double normalized =  (length - lca) / length;
+            double normalized = (length - lca) / length;
             double weight = this.weights[i];
             distance += weight * normalized;
         }
@@ -161,7 +167,7 @@ public class Dimensions {
     }
 
     public void add(String[] row) {
-        //Each row is formatted as [Source, (Column Type)+]
+        //A row consists of [Source, Members+]
         if (this.columns.length + 1 != row.length) {
             throw new IllegalArgumentException("CORE: each source must include members for all dimensions");
         }
@@ -181,13 +187,13 @@ public class Dimensions {
                     return Double.parseDouble(member);
                 case TEXT:
                     return member;
+                default:
+                    throw new IllegalArgumentException("CORE: \"" + this.types[index] + "\" is not supported");
             }
         }
         catch (NumberFormatException nfe){
             throw new IllegalArgumentException("CORE: \"" + member+ "\" is not a \"" + this.types[index] + "\"");
         }
-        //This return statement was requested by the compiler
-        return null;
     }
 
     public String toString() {
@@ -213,7 +219,7 @@ public class Dimensions {
         sb.append(' ');
         sb.append(this.types[withComma]);
 
-        //Add the rows
+        //Adds the rows
         for (HashMap.Entry<String, Object[]> row : this.rows.entrySet()) {
             sb.append("\n ");
             sb.append(row.getKey());
@@ -248,7 +254,7 @@ public class Dimensions {
     }
 
     private Object[] parseRow(String[] row) {
-        //Each row is formatted as [Source, (Column Type)+]
+        //A row consists of [Source, Members+]
         int length = row.length - 1;
         String line = "";
         Object[] parsed = new Object[length];
@@ -281,14 +287,13 @@ public class Dimensions {
     }
 
     private int getLowestCommonAncestorLevel(int start, int end, TimeSeries[] tsgA, TimeSeries[] tsgB) {
-        //Dimensions are ordered by their level in the hierarchy so we iterate from T
+        //Members are ordered by their level in their respective dimension
         try {
             int lca = 0;
             for (int index = start; index <= end; index++) {
                 //All time series in the group must have the same member for each level
                 Object match = this.rows.get(tsgA[0].source)[index];
 
-                //Checks if all time series in each group match for this level
                 for (TimeSeries ts : tsgA) {
                     Object value = this.rows.get(ts.source)[index];
                     if ( ! match.equals(value)) {

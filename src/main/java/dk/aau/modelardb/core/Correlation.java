@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import java.util.HashSet;
 
 public class Correlation {
 
-    /** Constructor **/
+    /** Constructors **/
     public Correlation() {
         this.distance = -1.0F;
 
@@ -44,14 +44,14 @@ public class Correlation {
 
     public void updateScalingFactors(TimeSeries[] group, Dimensions dimensions) {
         for (TimeSeries ts : group) {
-            //Stores scaling factors for specific time series
+            //Sets the scaling factor for specific time series
             for (HashMap.Entry<String, Float> ls : this.scalingFactorForSource.entrySet()) {
                 if (ls.getKey().equals(ts.source)) {
                     ts.setScalingFactor(ls.getValue());
                 }
             }
 
-            //Stores scaling factors for time series with specific members
+            //Sets the scaling factor for time series with specific members
             for (HashMap.Entry<Integer, HashMap<Object, Float>> level : this.scalingFactorForMember.entrySet()) {
                 for (HashMap.Entry<Object, Float> member : level.getValue().entrySet()) {
                     Object tsMember = dimensions.get(ts.source)[level.getKey()];
@@ -68,19 +68,29 @@ public class Correlation {
     }
 
     public void addSources(String[] sources) {
-        //Elements inside one clause is combined by an AND operator, so multiple sets of sources are an error
+        //Elements inside a clause are combined with an AND operator, so multiple sets of sources are an error
         if ( ! this.correlatedSources.isEmpty()) {
             throw new IllegalArgumentException("CORE: correlated sources have already been declared in this clause");
         }
         this.correlatedSources.addAll(Arrays.asList(sources));
     }
 
-    public void addDimensionAndMember(String dim, Integer level, String[] members, Dimensions dimensions) {
+    public boolean hasOnlyCorrelatedSources() {
+        return this.distance == -1.0F && ! this.correlatedSources.isEmpty() &&
+                this.correlatedMembers.isEmpty() && this.correlatedDimensions.isEmpty() &&
+                this.scalingFactorForMember.isEmpty() && this.scalingFactorForSource.isEmpty();
+    }
+
+    public HashSet<String> getCorrelatedSources() {
+        return this.correlatedSources;
+    }
+
+    public void addDimensionAndMembers(String dim, Integer level, String[] members, Dimensions dimensions) {
         int column = getColumn(dim, level, dimensions);
         if ( ! this.correlatedMembers.containsKey(column)) {
             this.correlatedMembers.put(column, new HashSet<>());
         } else {
-            //Elements inside one clause is combined by an AND operator, so multiple sets of members is an error
+            //Elements inside a clause are combined with an AND operator, so multiple sets of members are an error
             throw new IllegalArgumentException("CORE: correlation have already been declared for this column in this clause");
         }
         Object[] parsedMember = Arrays.stream(members).map(member -> dimensions.parse(column, member)).toArray();
@@ -90,7 +100,7 @@ public class Correlation {
     public void addDimensionAndLCA(String dim, Integer lca, Dimensions dimensions) {
         Pair<Integer, Integer> startEnd = getDimension(dim, dimensions);
 
-        //The dimension and LCA is converted to columns in the denormalized schema used by dimensions
+        //The dimension and LCA is converted to columns in the denormalized schema used by Dimensions
         if (lca == 0) {
             this.correlatedDimensions.put(startEnd._1, startEnd._2);
         } else if (lca < 0) {
@@ -117,7 +127,7 @@ public class Correlation {
     private int getColumn(String dim, Integer level, Dimensions dimensions) {
         Pair<Integer, Integer> startEnd = getDimension(dim, dimensions);
 
-        //The dimension and level is converted to a column in the denormalized schema used by dimensions
+        //The dimension and level is converted to a column in the denormalized schema used by Dimensions
         int dimensionLevel = 0;
         if (level == 0) {
             dimensionLevel = startEnd._2;
@@ -127,7 +137,7 @@ public class Correlation {
             dimensionLevel = startEnd._1 + level - 1;
         }
 
-        //Verifies that the user have not specified a level that is greater than the number of levels in the dimension
+        //Verifies that the user has not specified a level that is greater than the number of levels in the dimension
         if (dimensionLevel < startEnd._1 || dimensionLevel > startEnd._2) {
             throw new IllegalArgumentException("CORE: the level \"" + level + "\" does not exist for dimension \"" + dim + "\"");
         }
@@ -161,15 +171,15 @@ public class Correlation {
 
     private boolean isCorrelatedByMembers(TimeSeries[] groupOne, TimeSeries[] groupTwo, Dimensions dimensions) {
         boolean correlated = true;
-        for (HashMap.Entry<Integer, HashSet<Object>> columnAndMember : this.correlatedMembers.entrySet()) {
+        for (HashMap.Entry<Integer, HashSet<Object>> columnToMembers : this.correlatedMembers.entrySet()) {
             for (TimeSeries ts : groupOne) {
-                Object member = dimensions.get(ts.source)[columnAndMember.getKey()];
-                correlated &= columnAndMember.getValue().contains(member);
+                Object member = dimensions.get(ts.source)[columnToMembers.getKey()];
+                correlated &= columnToMembers.getValue().contains(member);
             }
 
             for (TimeSeries ts : groupTwo) {
-                Object member = dimensions.get(ts.source)[columnAndMember.getKey()];
-                correlated &= columnAndMember.getValue().contains(member);
+                Object member = dimensions.get(ts.source)[columnToMembers.getKey()];
+                correlated &= columnToMembers.getValue().contains(member);
             }
         }
         return correlated;

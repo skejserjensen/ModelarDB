@@ -1,4 +1,4 @@
-/* Copyright 2018-2019 Aalborg University
+/* Copyright 2018-2020 Aalborg University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 package dk.aau.modelardb.core.models;
 
 import dk.aau.modelardb.core.DataPoint;
+import dk.aau.modelardb.core.utility.Static;
 
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -27,7 +28,7 @@ class PMC_MeanModel extends Model {
         this.currentSize = 0;
         this.min = Float.MAX_VALUE;
         this.max = -Float.MAX_VALUE;
-        this.sum = 0.0F;
+        this.sum = 0.0;
         this.withinErrorBound = true;
     }
 
@@ -38,10 +39,10 @@ class PMC_MeanModel extends Model {
             return false;
         }
 
-        //The model can represent all data points if the average value is within error bound of the min and max values
+        //The model can represent the data points if the new average is the within error bound of the new min and max
         float nextMin = this.min;
         float nextMax = this.max;
-        float nextSum = this.sum;
+        double nextSum = this.sum;
         for (DataPoint cdp : currentDataPoints) {
             float value = cdp.value;
             nextSum += value;
@@ -49,8 +50,9 @@ class PMC_MeanModel extends Model {
             nextMax = Math.max(nextMax, value);
         }
 
-        float average = nextSum / ((this.currentSize + 1) * currentDataPoints.length);
-        if (outsidePercentageErrorBound(average, nextMin) || outsidePercentageErrorBound(average, nextMax)) {
+        float average = (float) (nextSum / ((this.currentSize + 1) * currentDataPoints.length));
+        if (Static.outsidePercentageErrorBound(this.error, average, nextMin) ||
+                Static.outsidePercentageErrorBound(this.error, average, nextMax)) {
             this.withinErrorBound = false;
             return false;
         }
@@ -63,7 +65,7 @@ class PMC_MeanModel extends Model {
 
     @Override
     public void initialize(List<DataPoint[]> currentSegment) {
-        this.sum = 0.0F;
+        this.sum = 0.0;
         this.currentSize = 0;
         this.min = Float.MAX_VALUE;
         this.max = -Float.MAX_VALUE;
@@ -78,7 +80,7 @@ class PMC_MeanModel extends Model {
 
     @Override
     public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
-        return ByteBuffer.allocate(4).putFloat(sum / (currentSize * dps.get(0).length)).array();
+        return ByteBuffer.allocate(4).putFloat((float) (this.sum / (this.currentSize * dps.get(0).length))).array();
     }
 
     @Override
@@ -96,7 +98,7 @@ class PMC_MeanModel extends Model {
         if (this.currentSize == 0) {
             return Float.NaN;
         } else {
-            //The segment is represented as a single float which is 4 bytes
+            //The values are represented as a single float which is four bytes
             return 4.0F;
         }
     }
@@ -105,7 +107,7 @@ class PMC_MeanModel extends Model {
     private int currentSize;
     private float min;
     private float max;
-    private float sum;
+    private double sum;
     private boolean withinErrorBound;
 }
 
