@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,9 @@
  * limitations under the License.
  */
 package dk.aau.modelardb.core;
+
+import dk.aau.modelardb.core.timeseries.AsyncTimeSeries;
+import dk.aau.modelardb.core.timeseries.TimeSeries;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -30,15 +33,15 @@ public class TimeSeriesGroup implements Serializable {
         }
 
         //Each time series is assumed to have the same sampling interval, alignment, and boundness
-        this.isBounded = timeSeries[0].isBounded;
-        this.resolution = timeSeries[0].resolution;
+        this.isAsync = timeSeries[0] instanceof AsyncTimeSeries;
+        this.samplingInterval = timeSeries[0].samplingInterval;
         for (TimeSeries ts : timeSeries) {
-            if (this.isBounded != ts.isBounded) {
+            if (this.isAsync != ts instanceof AsyncTimeSeries) {
                 throw new UnsupportedOperationException("CORE: All time series in a group must be bounded or unbounded");
             }
 
-            if (this.resolution != ts.resolution) {
-                throw new UnsupportedOperationException("CORE: All time series in a group must share the same resolution");
+            if (this.samplingInterval != ts.samplingInterval) {
+                throw new UnsupportedOperationException("CORE: All time series in a group must share the same sampling interval");
             }
         }
 
@@ -65,8 +68,8 @@ public class TimeSeriesGroup implements Serializable {
             this.timeSeries[j] = tsg.timeSeries[i];
             j++;
         }
-        this.isBounded = this.timeSeries[0].isBounded;
-        this.resolution = this.timeSeries[0].resolution;
+        this.isAsync = this.timeSeries[0] instanceof AsyncTimeSeries;
+        this.samplingInterval = this.timeSeries[0].samplingInterval;
         tsg.timeSeriesHasNext = 0;
     }
 
@@ -83,22 +86,22 @@ public class TimeSeriesGroup implements Serializable {
 
             for (int i = 0; i < tsg.timeSeries.length; i++) {
                 TimeSeries ts = tsg.timeSeries[i];
-                int index = Arrays.binarySearch(joinIndex, ts.sid);
+                int index = Arrays.binarySearch(joinIndex, ts.tid);
                 this.nextDataPoints[index] = tsg.nextDataPoints[i];
                 this.currentDataPoints[index] = tsg.currentDataPoints[i];
                 this.timeSeries[index] = tsg.timeSeries[i];
             }
             tsg.timeSeriesHasNext = 0;
         }
-        this.isBounded = this.timeSeries[0].isBounded;
-        this.resolution = this.timeSeries[0].resolution;
+        this.isAsync = this.timeSeries[0] instanceof AsyncTimeSeries;
+        this.samplingInterval = this.timeSeries[0].samplingInterval;
     }
 
     /** Public Methods **/
     public void initialize() {
         for (int i = 0; i < this.timeSeries.length; i++) {
             TimeSeries ts = this.timeSeries[i];
-            ts.initialize.run();
+            ts.open();
 
             //Stores the first data point from each time series to track when a gap occurs
             if (ts.hasNext()) {
@@ -113,7 +116,9 @@ public class TimeSeriesGroup implements Serializable {
 
     public void attachToSelector(Selector s, SegmentGenerator mg) throws IOException {
         for(TimeSeries ts : this.timeSeries) {
-            ts.attachToSelector(s, mg);
+            if (ts instanceof AsyncTimeSeries) {
+                ((AsyncTimeSeries) ts).attachToSelector(s, mg);
+            }
         }
     }
 
@@ -121,7 +126,15 @@ public class TimeSeriesGroup implements Serializable {
         return this.timeSeries;
     }
 
-    public String getSource() {
+    public String getTids() {
+        StringJoiner sj = new StringJoiner(",", "{", "}");
+        for (TimeSeries ts : this.timeSeries) {
+            sj.add(Integer.toString(ts.tid));
+        }
+        return sj.toString();
+    }
+
+    public String getSources() {
         StringJoiner sj = new StringJoiner(",", "{", "}");
         for (TimeSeries ts : this.timeSeries) {
             sj.add(ts.source);
@@ -154,11 +167,11 @@ public class TimeSeriesGroup implements Serializable {
                 }
             } else {
                 //A gap have occurred so this data point cannot be not emitted in this iteration
-                currentDataPoints[i] = new DataPoint(ts.sid, this.next, Float.NaN);
+                currentDataPoints[i] = new DataPoint(ts.tid, this.next, Float.NaN);
                 this.timeSeriesActive--;
             }
         }
-        this.next += this.resolution;
+        this.next += this.samplingInterval;
         return this.currentDataPoints;
     }
 
@@ -174,14 +187,14 @@ public class TimeSeriesGroup implements Serializable {
 
     /** Instance Variables **/
     public final int gid;
-    public final boolean isBounded;
-    public final int resolution;
+    public final boolean isAsync;
+    public final int samplingInterval;
 
     private int timeSeriesActive;
     private int timeSeriesHasNext;
-    private TimeSeries[] timeSeries;
+    private final TimeSeries[] timeSeries;
 
     private long next;
-    private DataPoint[] currentDataPoints;
-    private DataPoint[] nextDataPoints;
+    private final DataPoint[] currentDataPoints;
+    private final DataPoint[] nextDataPoints;
 }

@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,14 @@ import dk.aau.modelardb.core.utility.Static;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-class SwingFilterModel extends Model {
+class SwingFilterModelType extends ModelType {
 
     /** Constructors **/
-    SwingFilterModel(int mid, float error, int limit) {
-        super(mid, error, limit);
-        this.withinErrorBound = true;
+    SwingFilterModelType(int mtid, float errorBound, int lengthBound) {
+        super(mtid, errorBound, lengthBound);
+        if (errorBound < 0.0 || 100.0 < errorBound) {
+            throw new IllegalArgumentException("CORE: for SwingFilterModelType modelardb.error_bound must be a percentage");
+        }
     }
 
     /** Public Methods **/
@@ -45,21 +47,21 @@ class SwingFilterModel extends Model {
             float min = Static.min(currentDataPoints);
             float max = Static.max(currentDataPoints);
             float avg = Static.avg(currentDataPoints);
-            if (Static.outsidePercentageErrorBound(this.error, avg, min) ||
-                    Static.outsidePercentageErrorBound(this.error, avg, max)) {
+            if (Static.outsidePercentageErrorBound(this.errorBound, avg, min) ||
+                    Static.outsidePercentageErrorBound(this.errorBound, avg, max)) {
                 this.withinErrorBound = false;
                 return false;
             }
 
             // Line 1 - 2
-            this.initialDataPoint = new DataPoint(currentDataPoints[0].sid, currentDataPoints[0].timestamp, avg);
+            this.initialDataPoint = new DataPoint(currentDataPoints[0].tid, currentDataPoints[0].timestamp, avg);
         } else {
             //Expect for the first set of data point, all data points can be appended one at a time
             for (DataPoint currentDataPoint : currentDataPoints) {
                 //Calculates the absolute allowed deviation before the error bound is exceeded. In theory the deviation
                 // should be calculated as the Math.abs(currentDataPoint.value * (this.error / 100.0)). However, due to
                 // the calculation not being perfectly accurate, 100.0 allows data points slightly above the error bound
-                double deviation = Math.abs(currentDataPoint.value * (this.error / 100.1));
+                double deviation = Math.abs(currentDataPoint.value * (this.errorBound / 100.1));
 
                 if (this.currentSize == 1) {
                     // Line 3
@@ -113,7 +115,7 @@ class SwingFilterModel extends Model {
     }
 
     @Override
-    public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+    public byte[] getModel(long startTime, long endTime, int samplingInterval, List<DataPoint[]> dps) {
         //All lines within the two bounds are valid but always selecting one of the bounds add unnecessary error to sums
         double a = (this.lowerBound.a + this.upperBound.a) / 2.0;
         double b = (this.lowerBound.b + this.upperBound.b) / 2.0;
@@ -129,8 +131,8 @@ class SwingFilterModel extends Model {
 
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
-        return new SwingFilterSegment(sid, startTime, endTime, resolution, parameters, offsets);
+    public Segment get(int tid, long startTime, long endTime, int samplingInterval, byte[] model, byte[] offsets) {
+        return new SwingFilterSegment(tid, startTime, endTime, samplingInterval, model, offsets);
     }
 
     @Override
@@ -139,7 +141,7 @@ class SwingFilterModel extends Model {
     }
 
     @Override
-    public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+    public float size(long startTime, long endTime, int samplingInterval, List<DataPoint[]> dps) {
         //A linear function cannot be computed without at least two data points so we return NaN
         if (this.currentSize < 2) {
             return Float.NaN;
@@ -151,17 +153,17 @@ class SwingFilterModel extends Model {
 
         //Verifies that the model has the necessary precession to be utilized, while the function computed in theory
         // should not exceed the error bound it can do so (especially with 0% error) due to floating-point imprecision
-        for (int i = 0; startTime < endTime + resolution; i++, startTime += resolution) {
+        for (int i = 0; startTime < endTime + samplingInterval; i++, startTime += samplingInterval) {
             DataPoint[] dpa = dps.get(i);
             float approximation = (float) (a * dpa[0].timestamp + b);
             for (DataPoint dp : dpa) {
-                if (Static.outsidePercentageErrorBound(this.error, approximation, dp.value)) {
+                if (Static.outsidePercentageErrorBound(this.errorBound, approximation, dp.value)) {
                     return Float.NaN;
                 }
             }
         }
 
-        //Determines if we need to use doubles or if floats are precise enough for the parameters
+        //Determines if we need to use doubles or if floats are precise enough for the model
         if ((double) (float) a == a && (double) (float) b == b) {
             return 8.0F;
         } else if ((double) (float) a == a) {
@@ -182,15 +184,15 @@ class SwingFilterModel extends Model {
 class SwingFilterSegment extends Segment {
 
     /** Constructors **/
-    SwingFilterSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
-        super(sid, startTime, endTime, resolution, offsets);
-        ByteBuffer arguments = ByteBuffer.wrap(parameters);
+    SwingFilterSegment(int tid, long startTime, long endTime, int samplingInterval, byte[] model, byte[] offsets) {
+        super(tid, startTime, endTime, samplingInterval, offsets);
+        ByteBuffer arguments = ByteBuffer.wrap(model);
 
         //Depending on the data being encoded, the linear function might have required double precision floating-point
-        if (parameters.length == 16) {
+        if (model.length == 16) {
             this.a = arguments.getDouble();
             this.b = arguments.getDouble();
-        } else if (parameters.length == 12) {
+        } else if (model.length == 12) {
             this.a = arguments.getFloat();
             this.b = arguments.getDouble();
         } else {

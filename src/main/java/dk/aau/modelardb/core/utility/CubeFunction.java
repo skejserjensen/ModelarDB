@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,5 +19,5 @@ import dk.aau.modelardb.core.models.Segment;
 import java.io.Serializable;
 
 public interface CubeFunction extends Serializable {
-    void aggregate(Segment segment, int sid, int field, double[] result);
+    void aggregate(Segment segment, int tid, int field, double[] result);
 }

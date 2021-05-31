@@ -1,4 +1,4 @@
-/* Copyright 2018 The ModelarDB Contributors
+/* Copyright 2021 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,8 +12,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dk.aau.modelardb.core.utility;
+package dk.aau.modelardb.core.timeseries;
 
-public interface SegmentFunction {
-    void emit(int gid, long startTime, long endTime, int mtid, byte[] model, byte[] gaps);
+import dk.aau.modelardb.core.SegmentGenerator;
+
+import java.io.IOException;
+import java.nio.channels.Selector;
+
+public interface AsyncTimeSeries {
+    void attachToSelector(Selector s, SegmentGenerator mg) throws IOException;
 }

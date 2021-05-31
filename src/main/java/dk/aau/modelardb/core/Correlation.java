@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
  */
 package dk.aau.modelardb.core;
 
+import dk.aau.modelardb.core.timeseries.TimeSeries;
 import dk.aau.modelardb.core.utility.Pair;
 
 import java.util.Arrays;
@@ -47,7 +48,7 @@ public class Correlation {
             //Sets the scaling factor for specific time series
             for (HashMap.Entry<String, Float> ls : this.scalingFactorForSource.entrySet()) {
                 if (ls.getKey().equals(ts.source)) {
-                    ts.setScalingFactor(ls.getValue());
+                    ts.scalingFactor = ls.getValue();
                 }
             }
 
@@ -56,7 +57,7 @@ public class Correlation {
                 for (HashMap.Entry<Object, Float> member : level.getValue().entrySet()) {
                     Object tsMember = dimensions.get(ts.source)[level.getKey()];
                     if (tsMember.equals(member.getKey())) {
-                        ts.setScalingFactor(member.getValue());
+                        ts.scalingFactor = member.getValue();
                     }
                 }
             }
@@ -128,7 +129,7 @@ public class Correlation {
         Pair<Integer, Integer> startEnd = getDimension(dim, dimensions);
 
         //The dimension and level is converted to a column in the denormalized schema used by Dimensions
-        int dimensionLevel = 0;
+        int dimensionLevel;
         if (level == 0) {
             dimensionLevel = startEnd._2;
         } else if (level < 0) {
@@ -194,11 +195,11 @@ public class Correlation {
     }
 
     /** Instance Variables **/
-    private HashSet<String> correlatedSources;
-    private HashMap<Integer, HashSet<Object>> correlatedMembers;
-    private HashMap<Integer, Integer> correlatedDimensions;
+    private final HashSet<String> correlatedSources;
+    private final HashMap<Integer, HashSet<Object>> correlatedMembers;
+    private final HashMap<Integer, Integer> correlatedDimensions;
     private float distance;
 
-    private HashMap<String, Float> scalingFactorForSource;
-    private HashMap<Integer, HashMap<Object, Float>> scalingFactorForMember;
+    private final HashMap<String, Float> scalingFactorForSource;
+    private final HashMap<Integer, HashMap<Object, Float>> scalingFactorForMember;
 }

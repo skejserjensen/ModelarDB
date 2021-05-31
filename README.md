@@ -30,34 +30,30 @@ the necessary dependencies are included as part of this archive.
 The work leading to ModelarDB is documented in a number of papers. If you use
 ModelarDB in academia, please cite the relevant paper(s) below.
 
-***Time Series Management Systems: A Survey***  
-by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen  
-in *IEEE Transactions on Knowledge and Data Engineering, 29(11): 2581–2600, 2017*  
+***Time Series Management Systems: A Survey***\
+by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
+in *IEEE Transactions on Knowledge and Data Engineering, 29(11): 2581–2600, 2017*\
 Download: [IEEE](https://ieeexplore.ieee.org/document/8012550/), [arXiv](https://arxiv.org/abs/1710.01077)
 
-***ModelarDB: Modular Model-Based Time Series Management with Spark and Cassandra***  
-by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen  
-in *The Proceedings of the VLDB Endowment, 11(11): 1688-1701, 2018*  
+***ModelarDB: Modular Model-Based Time Series Management with Spark and Cassandra***\
+by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
+in *The Proceedings of the VLDB Endowment, 11(11): 1688-1701, 2018*\
 Download: [PVLDB](http://www.vldb.org/pvldb/vol11/p1688-jensen.pdf)
 
-***Demonstration of ModelarDB: Model-Based Management of Dimensional Time Series***  
-by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen  
-in *The Proceedings of SIGMOD, 1933-1936, 2019*  
+***Demonstration of ModelarDB: Model-Based Management of Dimensional Time Series***\
+by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
+in *The Proceedings of SIGMOD, 1933-1936, 2019*\
 Download: [ACM](https://dl.acm.org/doi/10.1145/3299869.3320216)
 
-***Model-Based Time Series Management at Scale***  
-by Søren Kejser Jensen  
-*PhD Thesis, The Technical Faculty of IT and Design, Aalborg University, 2019*  
+***Model-Based Time Series Management at Scale***\
+by Søren Kejser Jensen\
+*PhD Thesis, The Technical Faculty of IT and Design, Aalborg University, 2019*\
 Download: [AAU](https://vbn.aau.dk/en/publications/model-based-time-series-management-at-scale)
 
-***Scalable Model-Based Management of Correlated Dimensional Time Series in ModelarDB+***  
-by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen  
-to appear in *The Proceedings of ICDE, 2021*  
+***Scalable Model-Based Management of Correlated Dimensional Time Series in ModelarDB+***\
+by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
+to appear in *The Proceedings of ICDE, 2021*\
 Download: [arXiv](https://arxiv.org/abs/1903.10269)
-
-NOTE: The papers use a Tid (Time series identifier) to uniquely identify time
-series while the open-source implementation of ModelarDB uses a Sid (Source
-identifier) due to a naming conflict in the initial implementation.
 
 ## Configuration
 ModelarDB requires that a configuration file is available at

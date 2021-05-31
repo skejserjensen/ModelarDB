@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,83 +15,165 @@
 package dk.aau.modelardb.engines.spark
 
 import dk.aau.modelardb.core.DataPoint
+import dk.aau.modelardb.core.models.Segment
+import dk.aau.modelardb.engines.{CodeGenerator, EngineUtilities}
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Row
 
-//Abstract classes that projections generated at run-time using the ToolBox APIs can derive from
-abstract class SparkSegmentProjector extends Serializable {
-  def project(row: Row, dmc: Array[Array[Object]]): Row
-}
+import java.sql.Timestamp
+import scala.annotation.switch
+import scala.collection.JavaConverters._
 
-abstract class SparkDataPointProjector extends Serializable {
-  def project(dp: DataPoint, dmc: Array[Array[Object]], sc: Array[Float]): Row
-}
+object SparkProjector {
 
-object SparkProjection {
-
-  def getSegmentProjection(requiredColumns: Array[String], segmentViewNameToIndex: Map[String, Int]): String = {
-    val columns = requiredColumns.map(column => {
-      val index = segmentViewNameToIndex(column)
-      if (index <= 7) "segmentRow.get(" + (index - 1) + ")" else "dmc(sid)(" + (index - 8) + ")"
-    })
-
-    val code = s"""
-        import dk.aau.modelardb.engines.spark.SparkSegmentProjector
-        import java.sql.Timestamp
-        import org.apache.spark.sql.Row
-
-        new SparkSegmentProjector {
-            override def project(segmentRow: Row, dmc: Array[Array[Object]]): Row = {
-              val sid = segmentRow.getInt(0)
-              ${columns.mkString("Row(", ",", ")")}
-            }
+  /** Public Methods **/
+  def segmentProjection(rows: RDD[Row], requiredColumns: Array[String]): RDD[Row] = {
+    //NOTE: optimized projection methods are not generated for all combinations
+    // of columns in the segment view due to technical limitations, the Scala
+    // compiler cannot compile the large amount of generated code. Instead, an
+    // appropriate subset is selected to match the requirement of queries from
+    // the Data Point View and queries using the optimized UDAFs for aggregate
+    // queries. This ensures most queries sent to the Segment View can use an
+    // optimized projection method generated using static code generation,
+    // despite the limitations of Scalac, while keeping the compile time low
+    val target = computeJumpTarget(requiredColumns, EngineUtilities.segmentViewNameToIndex, 6)
+    (target: @switch) match {
+      case 0 => //COUNT(*)
+        rows
+      case 123 => //COUNT_S(#)
+        rows.map((row: Row) => Row(row.getInt(3), row.getTimestamp(1), row.getTimestamp(2)))
+      case 123456 => //Data Point View and UDAFs
+        rows.map((row: Row) => Row(row.getInt(0), row.getTimestamp(1), row.getTimestamp(2),
+          row.getInt(3), row.getAs[Array[Byte]](4), row.getAs[Array[Byte]](5)))
+      case _ =>
+        //Selects an appropriate dynamic projection method based on the approximate size of the data set
+        if (Spark.isDataSetSmall(rows)) {
+          rows.map(SparkProjector.getSegmentGridFunctionFallback(requiredColumns))
+        } else {
+          val code = CodeGenerator.getSparkSegmentProjection(requiredColumns, EngineUtilities.segmentViewNameToIndex)
+          val tsmc = Spark.getSparkStorage.timeSeriesMembersCache
+          rows.mapPartitions(it => {
+            val projector = CodeGenerator.compileSparkSegmentProjection(code)
+            it.map(row => projector.project(row, tsmc))
+          })
         }
-    """.stripMargin
-    code
+    }
   }
 
-  def compileSegmentProjection(code: String): SparkSegmentProjector = {
-    compileProjection(code).asInstanceOf[SparkSegmentProjector]
+  def dataPointProjection(rows: RDD[Row], requiredColumns: Array[String]): RDD[Row] = {
+    val segments = rows.map(getRowToSegment)
+
+    //If a query only needs the rows but not the content data point creation is skipped
+    if (requiredColumns.isEmpty) {
+      segments.flatMap(segment => Range.inclusive(1, segment.length()).map(_ => Row()))
+    } else {
+      val dataPoints = segments.flatMap(segment => segment.grid().iterator().asScala)
+
+      //Projections that do not include dimensions can used statically generated projection methods
+      val projection = getDataPointGridFunction(requiredColumns)
+      if (projection != null) {
+        return dataPoints.map(projection)
+      }
+
+      //Selects an appropriate dynamic projection method based on the approximate size of the data set
+      if (Spark.isDataSetSmall(rows)) {
+        dataPoints.map(SparkProjector.getDataPointGridFunctionFallback(requiredColumns))
+      } else {
+        val code = CodeGenerator.getSparkDataPointProjection(requiredColumns, EngineUtilities.dataPointViewNameToIndex)
+        val storage = Spark.getSparkStorage
+        val tsmc = storage.timeSeriesMembersCache
+        val tssfc = storage.timeSeriesScalingFactorCache
+        val btstc = Spark.getBroadcastedTimeSeriesTransformationCache
+        dataPoints.mapPartitions(it => {
+          val projector = CodeGenerator.compileSparkDataPointProjection(code)
+          it.map(row => projector.project(row, tsmc, tssfc, btstc))
+        })
+      }
+    }
   }
 
-  def getDataPointProjection(requiredColumns: Array[String], dataPointViewNameToIndex: Map[String, Int]): String = {
-
-    val columns = requiredColumns.map(column => {
-      val index = dataPointViewNameToIndex(column)
-      if (index <= 3) dataPointProjectionFragments(index - 1) else "dmc(dp.sid)(" + (index - 4) + ")"
-    })
-
-    val code = s"""
-        import dk.aau.modelardb.engines.spark.SparkDataPointProjector
-        import dk.aau.modelardb.core.DataPoint
-        import java.sql.Timestamp
-        import org.apache.spark.sql.Row
-
-        new SparkDataPointProjector {
-            override def project(dp: DataPoint, dmc: Array[Array[Object]], sc: Array[Float]): Row = {
-                ${columns.mkString("Row(", ",", ")")}
-            }
-        }
-    """.stripMargin
-    code
-  }
-
-  def compileDataPointProjection(code: String): SparkDataPointProjector = {
-    compileProjection(code).asInstanceOf[SparkDataPointProjector]
+  def getRowToSegment: Row => Segment = {
+    val mtc = Spark.getSparkStorage.modelTypeCache
+    val tssic = Spark.getSparkStorage.timeSeriesSamplingIntervalCache
+    row => {
+      val tid = row.getInt(0)
+      mtc(row.getInt(3)).get(tid, row.getTimestamp(1).getTime, row.getTimestamp(2).getTime,
+        tssic(tid), row.getAs[Array[Byte]](4), row.getAs[Array[Byte]](5))
+    }
   }
 
   /** Private Methods **/
-  private def compileProjection(code: String): Any = {
-    //Imports the packages required to construct the toolbox
-    import scala.reflect.runtime.currentMirror
-    import scala.tools.reflect.ToolBox
-    val toolBox = currentMirror.mkToolBox()
-
-    //Parses and compiles the code before constructing a projector object
-    val ast = toolBox.parse(code)
-    val compiled = toolBox.compile(ast)
-    compiled()
+  private def getSegmentGridFunctionFallback(requiredColumns: Array[String]): Row => Row = {
+    val tsmc = Spark.getSparkStorage.timeSeriesMembersCache
+    val columns = requiredColumns.map(EngineUtilities.segmentViewNameToIndex)
+    row => Row.fromSeq(columns.map({
+      case 1 => row.getInt(0)
+      case 2 => row.getTimestamp(1)
+      case 3 => row.getTimestamp(2)
+      case 4 => row.getInt(3)
+      case 5 => row.getAs[Array[Byte]](4)
+      case 6 => row.getAs[Array[Long]](5)
+      case index => tsmc(row.getInt(0))(index - 7)
+    }))
   }
 
-  /** Instance Variables **/
-  private val dataPointProjectionFragments = Array("dp.sid", "new Timestamp(dp.timestamp)", "dp.value / sc(dp.sid)")
+  def getDataPointGridFunction(requiredColumns: Array[String]): DataPoint => Row = {
+    val tssfc = Spark.getSparkStorage.timeSeriesScalingFactorCache
+    val btstc = Spark.getBroadcastedTimeSeriesTransformationCache
+    val target = computeJumpTarget(requiredColumns, EngineUtilities.dataPointViewNameToIndex, 3)
+    (target: @switch) match {
+      //Permutations of ('tid')
+      case 1 => (dp: DataPoint) => Row(dp.tid)
+      //Permutations of ('ts')
+      case 2 => (dp: DataPoint) => Row(new Timestamp(dp.timestamp))
+      //Permutations of ('val')
+      case 3 => (dp: DataPoint) => Row(btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)))
+      //Permutations of ('tid', 'ts')
+      case 12 => (dp: DataPoint) => Row(dp.tid, new Timestamp(dp.timestamp))
+      case 21 => (dp: DataPoint) => Row(new Timestamp(dp.timestamp), dp.tid)
+      //Permutations of ('tid', 'val')
+      case 13 => (dp: DataPoint) => Row(dp.tid, btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)))
+      case 31 => (dp: DataPoint) => Row(btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)), dp.tid)
+      //Permutations of ('ts', 'val')
+      case 23 => (dp: DataPoint) => Row(new Timestamp(dp.timestamp), btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)))
+      case 32 => (dp: DataPoint) => Row(btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)), new Timestamp(dp.timestamp))
+      //Permutations of ('tid', 'ts', 'val')
+      case 123 => (dp: DataPoint) => Row(dp.tid, new Timestamp(dp.timestamp), btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)))
+      case 132 => (dp: DataPoint) => Row(dp.tid, btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)), new Timestamp(dp.timestamp))
+      case 213 => (dp: DataPoint) => Row(new Timestamp(dp.timestamp), dp.tid, btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)))
+      case 231 => (dp: DataPoint) => Row(new Timestamp(dp.timestamp), btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)), dp.tid)
+      case 312 => (dp: DataPoint) => Row(btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)), dp.tid, new Timestamp(dp.timestamp))
+      case 321 => (dp: DataPoint) => Row(btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid)), new Timestamp(dp.timestamp), dp.tid)
+      //Static projections cannot be used for rows with dimensions
+      case _ => null
+    }
+  }
+
+  def getDataPointGridFunctionFallback(requiredColumns: Array[String]): DataPoint => Row = {
+    val tsmc = Spark.getSparkStorage.timeSeriesMembersCache
+    val tssfc = Spark.getSparkStorage.timeSeriesScalingFactorCache
+    val btstc = Spark.getBroadcastedTimeSeriesTransformationCache
+    val columns = requiredColumns.map(EngineUtilities.dataPointViewNameToIndex)
+    dp => Row.fromSeq(columns.map({
+      case 1 => dp.tid
+      case 2 => new Timestamp(dp.timestamp)
+      case 3 => btstc.value(dp.tid).transform(dp.value, tssfc(dp.tid))
+      case index => tsmc(dp.tid)(index - 4)
+    }))
+  }
+
+  private def computeJumpTarget(requiredColumns: Array[String], map: Map[String, Int], staticColumns: Int): Int = {
+    var factor: Int = 1
+    var target: Int = 0
+    //Computes a key for a statically generated projection function as the query only require static columns
+    for (col: String <- requiredColumns.reverseIterator) {
+      val index = map(col)
+      if (index > staticColumns) {
+        return Integer.MAX_VALUE
+      }
+      target = target + factor * index
+      factor = factor * 10
+    }
+    target
+  }
 }

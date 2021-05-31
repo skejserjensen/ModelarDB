@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,59 +14,70 @@
  */
 package dk.aau.modelardb
 
-import java.nio.file.{Files, Paths}
-
 import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer}
+import dk.aau.modelardb.core.Configuration
 import dk.aau.modelardb.core.utility.Static
 
+import java.nio.file.{Files, Paths}
+import java.util.concurrent.Executor
 import scala.io.Source
+import scala.io.StdIn.readLine
 
 object Interface {
 
   /** Public Methods **/
-  def start(interface: String, sql: String => Array[String]): Unit = {
+  def start(configuration: Configuration, sql: String => Array[String]): Unit = {
+    if ( ! configuration.contains("modelardb.interface")) {
+      return
+    }
+
     this.sql = sql
-    interface match {
-      case "none" =>
-      case "socket" => socket()
-      case "http" => http()
+    configuration.getString("modelardb.interface") match {
+      case "socket" => socket(configuration.getExecutorService)
+      case "http" => http(configuration.getExecutorService)
+      case "repl" => repl(configuration.getStorage)
       case path if Files.exists(Paths.get(path)) => file(path)
       case _ => throw new java.lang.UnsupportedOperationException("unknown value for modelardb.interface in the config file")
     }
   }
 
   /** Private Methods **/
-  private def socket(): Unit = {
+  private def socket(executor: Executor): Unit = {
     //Setup
-    Static.info("ModelarDB: preparing socket end-point (Port: 9999)")
     val serverSocket = new java.net.ServerSocket(9999)
-    val clientSocket = serverSocket.accept()
-    val in = new java.io.BufferedReader(new java.io.InputStreamReader(clientSocket.getInputStream))
-    val out = new java.io.PrintWriter(clientSocket.getOutputStream, true)
 
-    //Query
-    Static.info("ModelarDB: the socket is ready to receive queries (Port: 9999)")
     while (true) {
-      val query = in.readLine().trim
-      if (query == ":quit") {
-        Static.info("ModelarDB: received termination command, shutdown imminent")
-        return
-      } else if ( ! query.isEmpty) {
-        execute(query, out.write)
-        out.flush()
-      }
+      Static.info("ModelarDB: socket end-point is ready (Port: 9999)")
+      val clientSocket = serverSocket.accept()
+      executor.execute(() => {
+        val in = new java.io.BufferedReader(new java.io.InputStreamReader(clientSocket.getInputStream))
+        val out = new java.io.PrintWriter(clientSocket.getOutputStream, true)
+
+        //Query
+        Static.info("ModelarDB: connection is ready")
+        while (true) {
+          val query = in.readLine().trim()
+          if (query == ":quit") {
+            //Cleanup
+            in.close()
+            out.close()
+            clientSocket.close()
+            Static.info("ModelarDB: conection is closed")
+            return
+          } else if (query.nonEmpty) {
+            execute(query, out.write)
+            out.flush()
+          }
+        }
+      })
     }
 
     //Cleanup
-    in.close()
-    out.close()
-    clientSocket.close()
     serverSocket.close()
   }
 
-  private def http(): Unit = {
+  private def http(executor: Executor): Unit = {
     //Setup
-    Static.info("ModelarDB: preparing HTTP end-point (Port: 9999)")
     val server = HttpServer.create(new java.net.InetSocketAddress(9999), 0)
 
     //Query
@@ -77,8 +88,8 @@ object Interface {
 
         //The query is executed with the result returned as an HTTP response
         val results = scala.collection.mutable.ArrayBuffer[String]()
-        execute(reader.readLine.trim, line => results.append(line))
-        val out = results.mkString("\n")
+        execute(reader.readLine.trim(), line => results.append(line))
+        val out = results.mkString("")
         httpExchange.sendResponseHeaders(200, out.length)
         val response = httpExchange.getResponseBody
         response.write(out.getBytes)
@@ -86,28 +97,37 @@ object Interface {
       }
     }
 
-    //Starts a HTTP server that executes QueryHandler for each incoming request on /
+    //Configures the HTTP server to executes QueryHandler on a separate thread for each incoming request on /
     server.createContext("/", new QueryHandler())
+    server.setExecutor(executor)
     server.start()
-    Static.info("ModelarDB: the HTTP server is ready to receive queries (Port: 9999)")
+    Static.info("ModelarDB: HTTP end-point is ready (Port: 9999)")
     scala.io.StdIn.readLine() //Prevents the method from returning to keep the server running
 
     //Cleanup
     server.stop(0)
   }
 
+  private def repl(storage: String): Unit = {
+    val prompt = storage.substring(storage.lastIndexOf('/') + 1) + "> "
+    do {
+      print(prompt)
+      execute(readLine, print)
+    } while(true)
+  }
+
   private def file(path: String): Unit = {
     //This method is only called if the file exist
     val st = System.currentTimeMillis()
     Static.info("ModelarDB: executing queries from " + path)
-    val lines = Source.fromFile(path).getLines()
-
-    for (line: String <- lines) {
-      val q = line.trim
+    val source = Source.fromFile(path)
+    for (line: String <- source.getLines()) {
+      val q = line.trim()
       if ( ! (q.isEmpty || q.startsWith("--"))) {
         execute(q.stripMargin, print)
       }
     }
+    source.close()
     val et = System.currentTimeMillis() - st
     val jst = java.time.Duration.ofMillis(et)
     Static.info("ModelarDB: finished all queries after " + jst)
@@ -117,7 +137,9 @@ object Interface {
     val st = System.currentTimeMillis()
     var result: Array[String] = null
     try {
-      val query_rewritten = query.replace("#", "sid, st, et, res, mid, param, gaps")
+      val query_rewritten =
+        query.replace("COUNT_S(#)", "COUNT_S(tid, start_time, end_time)")
+          .replace("#", "tid, start_time, end_time, mtid, model, gaps")
       result = this.sql(query_rewritten)
     } catch {
       case e: Exception =>

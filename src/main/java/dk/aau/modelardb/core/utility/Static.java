@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,19 @@
  */
 package dk.aau.modelardb.core.utility;
 
-import dk.aau.modelardb.core.*;
+import dk.aau.modelardb.core.DataPoint;
+import dk.aau.modelardb.core.timeseries.TimeSeries;
 
-import java.io.IOException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.BitSet;
+import java.util.Enumeration;
 
 public class Static {
 
@@ -50,15 +53,6 @@ public class Static {
         return bb.array();
     }
 
-    public static int indexOf(Object o, Object[] objs) {
-        for (int i = 0; i < objs.length; i++) {
-            if (objs[i].equals(o)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
     public static boolean contains(int i, int[] xs) {
         for (int x : xs) {
             if (x == i) {
@@ -70,8 +64,8 @@ public class Static {
 
     public static TimeSeries[] merge(TimeSeries[] tsA, TimeSeries[] tsB) {
         TimeSeries[] tss = new TimeSeries[tsA.length + tsB.length];
-        //The split and join algorithms depend on each group being numerically ordered by sid
-        if (tsA[0].sid < tsB[0].sid) {
+        //The split and join algorithms depend on each group being ordered by tid
+        if (tsA[0].tid < tsB[0].tid) {
             System.arraycopy(tsA, 0, tss, 0, tsA.length);
             System.arraycopy(tsB, 0, tss, tsA.length, tsB.length);
         } else {
@@ -124,7 +118,7 @@ public class Static {
         return result * 100.0;
     }
 
-    public static long gapsToBits(byte[] gaps, int[] sources) {
+    public static long gapsToBits(byte[] gaps, int[] timeSeries) {
         if (gaps.length == 0) {
             return 0;
         }
@@ -132,20 +126,20 @@ public class Static {
         BitSet bs = new BitSet();
         int[] values = bytesToInts(gaps);
         for (int g : values) {
-            //The metadata cache contains the resolution as the first element
-            int sid = Arrays.binarySearch(sources, 1, sources.length, g);
-            bs.set(sid - 1); //Sids start at one, but there is no reason to waste a bit
+            //The metadata cache contains the sampling interval as the first element
+            int tid = Arrays.binarySearch(timeSeries, 1, timeSeries.length, g);
+            bs.set(tid - 1); //Tids start at one, but there is no reason to waste a bit
         }
         return bs.toLongArray()[0];
     }
 
-    public static byte[] bitsToGaps(long value, int[] sources) {
+    public static byte[] bitsToGaps(long value, int[] timeSeries) {
         int index = 0;
         ArrayList<Integer> gaps = new ArrayList<>();
         while (value != 0L) {
             if (value % 2L != 0) {
-                //Sids start at one, but gaps are stored as sid - 1 to not waste a bit
-                gaps.add(sources[index + 1]);
+                //Tids start at one, but gaps are stored as tid - 1 to not waste a bit
+                gaps.add(timeSeries[index + 1]);
             }
             ++index;
             value = value >>> 1;
@@ -169,12 +163,6 @@ public class Static {
         } catch (NumberFormatException nfe){
             return false;
         }
-    }
-
-    public static void SIGTERM() throws IOException {
-        String name = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
-        String pid = name.split("@")[0];
-        Runtime.getRuntime().exec("kill " + pid);
     }
 
     public static void info(String line) {

@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,6 @@
  */
 package dk.aau.modelardb.engines.spark
 
-import java.sql.Timestamp
-import java.util.concurrent.locks.ReentrantReadWriteLock
-
-import dk.aau.modelardb.core.SegmentGroup
 import dk.aau.modelardb.core.utility.Static
 import edu.berkeley.cs.amplab.spark.indexedrdd.IndexedRDD
 import edu.berkeley.cs.amplab.spark.indexedrdd.IndexedRDD.intSet
@@ -25,9 +21,23 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.{Row, SparkSession}
 
-import scala.collection.JavaConverters._
+import java.sql.Timestamp
+import java.util.concurrent.locks.ReentrantReadWriteLock
 
-class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) extends Serializable {
+class SparkCache(spark: SparkSession, maxSegmentsCached: Int, newGids: Range) {
+
+  /** Instance Variables **/
+  private var checkpointCounter = 10
+  private val emptyRDD = spark.sparkContext.emptyRDD[Row]
+  private val cacheLock = new ReentrantReadWriteLock()
+  private var lastFlush = 0
+
+  private var storageCacheKey: Array[Filter] = Array(null)
+  private var storageCacheRDD = this.emptyRDD
+
+  private var temporaryRDD: IndexedRDD[Int, Array[Row]] = getIndexedRDD
+  private var finalizedRDD = this.emptyRDD
+  private var ingestedRDD = this.emptyRDD
 
   /** Public Methods **/
   def update(microBatch: RDD[Row]): Unit = {
@@ -36,7 +46,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
     //Updates the cache of temporary segments (they are marked as false in column seven)
     this.temporaryRDD = this.temporaryRDD.multiputRDD(
       microBatch.map(row => (row.getInt(0), Array(row))),
-      (_, r1: Array[Row], r2: Array[Row]) => updateTemporarySegment(r1, r2))
+      (_, r1: Array[Row], r2: Array[Row]) => SparkCache.updateTemporarySegment(r1, r2))
 
     //Flushes the ingested finalized segments to disk if the user-configurable batch size is reached
     this.finalizedRDD = spark.sparkContext.union(this.finalizedRDD, microBatch.filter(_.getBoolean(6)))
@@ -113,29 +123,15 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
   /** Private[spark] Methods **/
   private[spark] def write(microBatch: RDD[Row]): Unit = {
     //This method is not completely private so Spark can write RDDs directly to storage when bulk-loading
-    val ss = Spark.getSparkStorage
-    if (ss == null) {
-      val groups = microBatch.collect.map(row => new SegmentGroup(row.getInt(0), row.getTimestamp(1).getTime,
-        row.getTimestamp(2).getTime, row.getInt(3), row.getAs[Array[Byte]](4), row.getAs[Array[Byte]](5)))
-      Spark.getStorage.insert(groups, groups.length)
-    } else {
-      ss.writeRDD(microBatch)
-    }
+    Spark.getSparkStorage.storeSegmentGroups(spark, microBatch)
   }
 
   /** Private Methods **/
   private def getStorageRDDFromDisk(filters: Array[Filter]): RDD[Row] = {
-    val ss = Spark.getSparkStorage
-    if (ss == null) {
-      val rows = Spark.getStorage.getSegments.iterator().asScala.map(sg =>
-        Row(sg.gid, new Timestamp(sg.startTime), new Timestamp(sg.endTime), sg.mid, sg.parameters, sg.offsets))
-      spark.sparkContext.parallelize(rows.toSeq)
-    } else {
-      ss.getRDD(filters)
-    }
+    Spark.getSparkStorage.getSegmentGroups(spark, filters)
   }
 
-  private def getIndexedRDD = {
+  private def getIndexedRDD: IndexedRDD[Int, Array[Row]] = {
     //The IndexedRDD is populated with empty arrays for each new gid so that the merge function is always executed
     val initialData: Array[(Int, Array[Row])] = if (newGids.isEmpty) {
       Array()
@@ -146,7 +142,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
     IndexedRDD(rdd)
   }
 
-  private def checkpointOrPersist(indexedRDD: IndexedRDD[Int, Array[Row]]) = {
+  private def checkpointOrPersist(indexedRDD: IndexedRDD[Int, Array[Row]]): IndexedRDD[Int, Array[Row]] = {
     if (checkpointCounter == 0) {
       //HACK: allows IndexedRDDs to be checkpointed so its linage can be cleared
       val checkpointableRDD = indexedRDD.mapPartitions(x => x)
@@ -158,7 +154,14 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
       indexedRDD.persist()
     }
   }
+}
 
+object SparkCache {
+
+  /** Instance Variables **/
+  private val groupMetadataCache = Spark.getSparkStorage.groupMetadataCache
+
+  /** Private Methods **/
   private def updateTemporarySegment(buffer: Array[Row], input: Array[Row]): Array[Row] = {
     //The gaps are extracted from the new finalized or temporary segment
     val inputRow = input(0)
@@ -167,7 +170,7 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
 
     //Extracts the metadata for the group of time series being updated
     val group = this.groupMetadataCache(inputRow.getInt(0)).drop(1)
-    val resolution = this.groupMetadataCache(inputRow.getInt(0))(0)
+    val samplingInterval = this.groupMetadataCache(inputRow.getInt(0))(0)
     val inputIngested = group.toSet.diff(inputGaps.toSet)
     var updatedExistingSegment = false
 
@@ -186,9 +189,9 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
           //Moves the start time of the temporary segment to the data point right after the finalized segment, if
           // the new start time is after the end time of the temporary segment it can be dropped from the cache
           buffer(i) = null //The current temporary segment is deleted if it overlaps completely with the finalized segment
-          val startTime = inputRow.getTimestamp(2).getTime + resolution
+          val startTime = inputRow.getTimestamp(2).getTime + samplingInterval
           if (startTime <= row.getTimestamp(2).getTime) {
-            val newGaps = Static.intToBytes(gap :+ -((startTime - row.getTimestamp(1).getTime) / resolution).toInt)
+            val newGaps = Static.intToBytes(gap :+ -((startTime - row.getTimestamp(1).getTime) / samplingInterval).toInt)
             buffer(i) = Row(row.getInt(0), new Timestamp(startTime), row.getTimestamp(2),
               row.getInt(3), row.getAs[Array[Byte]](4), newGaps, row.getBoolean(6))
           }
@@ -201,22 +204,9 @@ class SparkCache(spark: SparkSession, newGids: Range, maxSegmentsCached: Int) ex
       //A split has occurred and multiple segments now represent what one did before, so the new ones are appended
       buffer.filter(_ != null) ++ input
     } else {
-      //A join have occurred and one segment now represent what two did before, so duplicates must be removed
+      //If temporary segment have been deleted, e.g., because a join have occurred and one segment now represents
+      // what two did before, null values and possible duplicate temporary segments must be removed from the cache
       buffer.filter(_ != null).distinct
     }
   }
-
-  /** Instance Variables **/
-  private var checkpointCounter = 10
-  private val emptyRDD = spark.sparkContext.emptyRDD[Row]
-  private val groupMetadataCache = Spark.getStorage.getGroupMetadataCache
-  private val cacheLock = new ReentrantReadWriteLock()
-  private var lastFlush = 0
-
-  private var storageCacheKey: Array[Filter] = Array(null)
-  private var storageCacheRDD = this.emptyRDD
-
-  private var temporaryRDD = getIndexedRDD
-  private var finalizedRDD = this.emptyRDD
-  private var ingestedRDD = this.emptyRDD
 }

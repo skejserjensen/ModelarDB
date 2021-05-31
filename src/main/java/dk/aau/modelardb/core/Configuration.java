@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,25 +14,24 @@
  */
 package dk.aau.modelardb.core;
 
-import java.util.*;
+import dk.aau.modelardb.core.utility.Pair;
+import dk.aau.modelardb.core.utility.ValueFunction;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.TimeZone;
+import java.util.concurrent.ExecutorService;
 
 public class Configuration {
 
     /** Constructors **/
     public Configuration() {
         this.values = new HashMap<>();
-        self = this;
     }
 
     /** Public Methods **/
-    static public Configuration get() {
-        if (self == null) {
-            throw new IllegalStateException("CORE: a configuration object have not been constructed");
-        }
-        return self;
-    }
-
-    public void add(String name, Object value) {
+    public Object add(String name, Object value) {
 
         Object[] values;
         if (value instanceof String) {
@@ -45,14 +44,40 @@ public class Configuration {
             values = new Object[]{value};
         }
         this.values.merge(name, values, this::mergeArrays);
+        return value;
     }
 
-    public boolean contains(String value) {
-        return this.values.containsKey(value);
+    public Object[] remove(String value) {
+        return this.values.remove(value);
+    }
+
+    public boolean contains(String... values) {
+        for (String value : values) {
+            if ( ! this.values.containsKey(value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public void containsOrThrow(String... values) {
+        //All of the missing values should shown as one error
+        ArrayList<String> missingValues = new ArrayList<>();
+        for (String value : values) {
+            if ( ! this.values.containsKey(value)) {
+                missingValues.add(value);
+            }
+        }
+
+        //If any of the values are missing execution cannot continue
+        if ( ! missingValues.isEmpty()) {
+            throw new IllegalArgumentException("ModelarDB: the following required options are not in the configuration file " +
+                    String.join(" ", missingValues));
+        }
     }
 
     //Generic Getters
-    public Object get(String name) {
+    public Object[] get(String name) {
         return this.values.get(name);
     }
 
@@ -68,6 +93,13 @@ public class Configuration {
         return (int) getObject(name);
     }
 
+    public int getInteger(String name, int defaultValue) {
+        if ( ! this.values.containsKey(name)) {
+            return defaultValue;
+        }
+        return getInteger(name);
+    }
+
     public float getFloat(String name) {
         try {
             return (float) getObject(name);
@@ -76,48 +108,76 @@ public class Configuration {
         }
     }
 
+    public float getFloat(String name, int defaultValue) {
+        if ( ! this.values.containsKey(name)) {
+            return defaultValue;
+        }
+        return getFloat(name);
+    }
+
     public String[] getArray(String name) {
         return Arrays.stream(this.values.get(name)).toArray(String[]::new);
     }
 
     //Specific Getters
-    public float getError() {
-        return getFloat("modelardb.error");
+    public int getBatchSize() {
+        return getInteger("modelardb.batch_size");
     }
 
-    public int getLatency() {
-        return getInteger("modelardb.latency");
+    public HashMap<Integer, Pair<String, ValueFunction>[]> getDerivedTimeSeries() {
+        return (HashMap<Integer, Pair<String, ValueFunction>[]>) this.values.get("modelardb.sources.derived")[0];
     }
 
-    public int getLimit() {
-        return getInteger("modelardb.limit");
-    }
-
-    public Calendar getCalendar() {
-        //Initializes the calendar with the appropriate time zone and locale
-        Locale locale = new Locale(this.getString("modelardb.locale"));
-        TimeZone timeZone = TimeZone.getTimeZone(this.getString("modelardb.timezone"));
-        return Calendar.getInstance(timeZone, locale);
-    }
-
-    public int getResolution() {
-        return getInteger("modelardb.resolution");
-    }
-
-    public String[] getModels() {
-        return getArray("modelardb.model");
-    }
-
-    public String[] getDataSources() {
-        return getArray("modelardb.source");
+    public Correlation[] getCorrelations() {
+        return (Correlation[]) this.values.get("modelardb.correlations");
     }
 
     public Dimensions getDimensions() {
         return (Dimensions) getObject("modelardb.dimensions");
     }
 
+    public float getErrorBound() {
+        return getFloat("modelardb.error_bound", 0);
+    }
+
+    public ExecutorService getExecutorService() {
+        return (ExecutorService) getObject("modelardb.executor_service");
+    }
+
+    public int getIngestors() {
+        return getInteger("modelardb.ingestors", 0);
+    }
+
+    public int getLengthBound() {
+        return getInteger("modelardb.length_bound", 50);
+    }
+
+    public String[] getModelTypeNames() {
+        return getArray("modelardb.model_types");
+    }
+
+    public int getMaximumLatency() {
+        return getInteger("modelardb.maximum_latency", 0);
+    }
+
+    public int getSamplingInterval() {
+        return getInteger("modelardb.sampling_interval");
+    }
+
+    public String[] getSources() {
+        return getArray("modelardb.sources");
+    }
+
     public String getStorage() {
         return getString("modelardb.storage");
+    }
+
+    public TimeZone getTimeZone() {
+        if (values.containsKey("modelardb.time_zone")) {
+            return TimeZone.getTimeZone((String) values.get("modelardb.time_zone")[0]);
+        } else {
+            return TimeZone.getDefault();
+        }
     }
 
     /** Private Methods **/
@@ -131,12 +191,12 @@ public class Configuration {
 
         try {
             return Integer.parseInt(value);
-        } catch (Exception e) {
+        } catch (Exception ignored) {
         }
 
         try {
             return Float.parseFloat(value);
-        } catch (Exception e) {
+        } catch (Exception ignored) {
         }
 
         return value;
@@ -145,32 +205,40 @@ public class Configuration {
     private void validate(String key, Object value) {
         //Settings used by the core are checked to ensure their values are within the expected range
         switch (key) {
-            case "modelardb.batch":
+            case "modelardb.batch_size":
                 if ( ! (value instanceof Integer) || (int) value <= 0) {
-                    throw new IllegalArgumentException("CORE: modelardb.batch must be a positive number");
+                    throw new IllegalArgumentException("CORE: modelardb.batch_size must be a positive number");
                 }
                 break;
-            case "modelardb.error":
-                if (( ! (value instanceof Float) || (float) value < 0.0 || 100.0 < (float) value) &&
-                        ( ! (value instanceof Integer) || (int) value < 0.0 || 100.0 < (int) value)) {
-                    throw new IllegalArgumentException("CORE: modelardb.error must be a percentage written from 0.0 to 100.0");
+            case "modelardb.error_bound":
+                if ( ! (value instanceof Float) && ! (value instanceof Integer)) {
+                    throw new IllegalArgumentException("CORE: modelardb.error_bound must be an integer or a float");
                 }
                 break;
-            case "modelardb.latency":
+            case "modelardb.maximum_latency":
                 if ( ! (value instanceof Integer) || (int) value < 0) {
-                    throw new IllegalArgumentException("CORE: modelardb.latency must be a positive number of seconds or zero to disable");
+                    throw new IllegalArgumentException("CORE: modelardb.maximum_latency must be zero or more data point groups");
                 }
                 break;
-            case "modelardb.limit":
-                if ( ! (value instanceof Integer) || (int) value < 0) {
-                    throw new IllegalArgumentException("CORE: modelardb.limit must be a positive number of seconds or zero to disable");
-                }
-                break;
-            case "modelardb.resolution":
+            case "modelardb.length_bound":
                 if ( ! (value instanceof Integer) || (int) value <= 0) {
-                    throw new IllegalArgumentException("CORE: modelardb.resolution must be a positive number of seconds");
+                    throw new IllegalArgumentException("CORE: modelardb.length_bound must be a positive number of data point groups");
                 }
                 break;
+            case "modelardb.sampling_interval":
+                if ( ! (value instanceof Integer) || (int) value < 0) {
+                    throw new IllegalArgumentException("CORE: modelardb.sampling_interval must be zero or a positive number of seconds");
+                }
+                break;
+            case "modelardb.ingestors":
+                if ( ! (value instanceof Integer) || (int) value < 0) {
+                    throw new UnsupportedOperationException("ModelarDB: modelardb.ingestors must be zero or a positive number of ingestors");
+                }
+                break;
+            case "modelardb.time_zone":
+                if ( ! (value instanceof String) || ! TimeZone.getTimeZone((String) value).getID().equals(value)) {
+                    throw new UnsupportedOperationException("ModelarDB: modelardb.time_zone must be a valid time zone id");
+                }
         }
     }
 
@@ -204,5 +272,4 @@ public class Configuration {
 
     /** Instance Variables **/
     private final HashMap<String, Object[]> values;
-    private static Configuration self = null;
 }

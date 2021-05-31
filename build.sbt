@@ -1,14 +1,19 @@
 name := "ModelarDB"
 version := "1.0"
-scalaVersion := "2.11.8"
-scalacOptions ++= Seq("-optimise", "-feature", "-deprecation", "-Xlint:_")
+scalaVersion := "2.12.13"
+scalacOptions ++= Seq("-opt:l:inline", "-opt-inline-from:<sources>", "-feature", "-deprecation", "-Xlint:_")
 
 libraryDependencies ++= Seq(
   "org.scala-lang" % "scala-compiler" % scalaVersion.value,
-  "org.xerial" % "sqlite-jdbc" % "3.18.0",
-  "com.datastax.spark" %% "spark-cassandra-connector" % "2.0.3",
-  "org.apache.spark" %% "spark-core" % "2.1.0" % "provided",
-  "org.apache.spark" %% "spark-streaming" % "2.1.0" % "provided",
-  "org.apache.spark" %% "spark-sql" % "2.1.0" % "provided")
 
-run in Compile := Defaults.runTask(fullClasspath in Compile, mainClass in (Compile, run), runner in (Compile, run)).evaluated
+  "com.h2database" % "h2" % "1.4.200",
+  "org.apache.spark" %% "spark-core" % "3.1.1" % "provided",
+  "org.apache.spark" %% "spark-streaming" % "3.1.1" % "provided",
+  "org.apache.spark" %% "spark-sql" % "3.1.1" % "provided",
+
+  "com.datastax.spark" %% "spark-cassandra-connector" % "3.0.1" % "provided",
+  "org.apache.hadoop" % "hadoop-client" % "3.2.0",
+  "org.apache.parquet" % "parquet-hadoop" % "1.10.1",
+  "org.apache.orc" % "orc-core" % "1.5.12")
+
+Compile / run := Defaults.runTask(Compile / fullClasspath, Compile / run / mainClass, Compile / run / runner).evaluated

@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,19 +17,19 @@ package dk.aau.modelardb.core;
 public class DataPoint {
 
     /** Constructors **/
-    public DataPoint(int sid, long timestamp, float value) {
-        this.sid = sid;
+    public DataPoint(int tid, long timestamp, float value) {
+        this.tid = tid;
         this.timestamp = timestamp;
         this.value = value;
     }
 
     /** Public Methods **/
     public String toString() {
-        return "DataPoint: [" + this.sid + " | " + new java.sql.Timestamp(this.timestamp) + " | " + this.value + "]";
+        return "DataPoint: [" + this.tid + " | " + new java.sql.Timestamp(this.timestamp) + " | " + this.value + "]";
     }
 
     /** Instance Variables **/
-    public final int sid;
+    public final int tid;
     public final long timestamp;
     public final float value;
 }

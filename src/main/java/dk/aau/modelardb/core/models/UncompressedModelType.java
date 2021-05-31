@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,29 +20,28 @@ import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.List;
 
-class UncompressedModel extends Model {
+class UncompressedModelType extends ModelType {
 
     /** Constructors **/
-    UncompressedModel(int mid, float error, int limit) {
-        super(mid, error, limit);
-        this.currentSize = 0;
+    UncompressedModelType(int mtid, float errorBound, int lengthBound) {
+        super(mtid, errorBound, lengthBound);
     }
 
     /** Public Methods **/
     @Override
     public boolean append(DataPoint[] currentDataPoints) {
-        //UncompressedModel is a last resort fallback so it simply stores the current buffer in an array
+        //UncompressedModelType is a last resort fallback so it simply stores the current buffer in an array
         this.currentSize++;
         return true;
     }
 
     @Override
     public void initialize(List<DataPoint[]> currentSegment) {
-        this.currentSize = Integer.min(this.limit, currentSegment.size());
+        this.currentSize = Integer.min(this.lengthBound, currentSegment.size());
     }
 
     @Override
-    public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+    public byte[] getModel(long startTime, long endTime, int samplingInterval, List<DataPoint[]> dps) {
         ByteBuffer values = ByteBuffer.allocate(4 * dps.get(0).length * dps.size());
         for(DataPoint[] dpss : dps) {
             for (DataPoint dp : dpss) {
@@ -53,8 +52,8 @@ class UncompressedModel extends Model {
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
-        return new UncompressedSegment(sid, startTime, endTime, resolution, parameters, offsets);
+    public Segment get(int tid, long startTime, long endTime, int samplingInterval, byte[] model, byte[] offsets) {
+        return new UncompressedSegment(tid, startTime, endTime, samplingInterval, model, offsets);
     }
 
     @Override
@@ -63,11 +62,11 @@ class UncompressedModel extends Model {
     }
 
     @Override
-    public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+    public float size(long startTime, long endTime, int samplingInterval, List<DataPoint[]> dps) {
         if (this.currentSize == 0) {
             return Float.NaN;
         } else {
-            //The model stores each value as a float, which requires four bytes for each
+            //The model type stores each value as a float, which requires four bytes for each
             return 4.0F * this.currentSize;
         }
     }
@@ -80,11 +79,11 @@ class UncompressedModel extends Model {
 class UncompressedSegment extends Segment {
 
     /** Constructors **/
-    UncompressedSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
-        super(sid, startTime, endTime, resolution, offsets);
+    UncompressedSegment(int tid, long startTime, long endTime, int samplingInterval, byte[] model, byte[] offsets) {
+        super(tid, startTime, endTime, samplingInterval, offsets);
 
-        FloatBuffer floatBuffer = ByteBuffer.wrap(parameters).asFloatBuffer();
-        float[] values = new float[parameters.length / 4];
+        FloatBuffer floatBuffer = ByteBuffer.wrap(model).asFloatBuffer();
+        float[] values = new float[model.length / 4];
         floatBuffer.get(values);
         this.values = values;
     }

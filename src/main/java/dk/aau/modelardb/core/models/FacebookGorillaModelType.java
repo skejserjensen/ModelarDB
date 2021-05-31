@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,23 +19,19 @@ import dk.aau.modelardb.core.utility.BitBuffer;
 
 import java.util.List;
 
-//The implementation of this model is based on code published by Michael Burman
+//The implementation of this model type is based on code published by Michael Burman
 // under the Apache2 license. LINK: https://github.com/burmanm/gorilla-tsc
-class FacebookGorillaModel extends Model {
+class FacebookGorillaModelType extends ModelType {
 
     /** Constructors **/
-    FacebookGorillaModel(int mid, float error, int limit) {
-        super(mid, error, limit);
-        this.currentSize = 0;
-        this.compressed = null;
-        this.storedLeadingZeros = Integer.MAX_VALUE;
-        this.storedTrailingZeros = 0;
+    FacebookGorillaModelType(int mtid, float errorBound, int lengthBound) {
+        super(mtid, errorBound, lengthBound);
     }
 
     /** Public Methods **/
     @Override
     public boolean append(DataPoint[] currentDataPoints) {
-        if (this.currentSize == this.limit) {
+        if (this.currentSize == this.lengthBound) {
             return false;
         }
 
@@ -57,7 +53,7 @@ class FacebookGorillaModel extends Model {
     @Override
     public void initialize(List<DataPoint[]> currentSegment) {
         this.currentSize = 0;
-        this.compressed = new BitBuffer(4 * this.limit);
+        this.compressed = new BitBuffer(4 * this.lengthBound);
         this.storedLeadingZeros = Integer.MAX_VALUE;
         this.storedTrailingZeros = 0;
 
@@ -67,13 +63,13 @@ class FacebookGorillaModel extends Model {
     }
 
     @Override
-    public byte[] parameters(long startTime, long endTime, int resolution, List<DataPoint[]> currentSegment) {
+    public byte[] getModel(long startTime, long endTime, int samplingInterval, List<DataPoint[]> currentSegment) {
         return this.compressed.array();
     }
 
     @Override
-    public Segment get(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
-        return new FacebookGorillaSegment(sid, startTime, endTime, resolution, parameters, offsets);
+    public Segment get(int tid, long startTime, long endTime, int samplingInterval, byte[] model, byte[] offsets) {
+        return new FacebookGorillaSegment(tid, startTime, endTime, samplingInterval, model, offsets);
     }
 
     @Override
@@ -82,7 +78,7 @@ class FacebookGorillaModel extends Model {
     }
 
     @Override
-    public float size(long startTime, long endTime, int resolution, List<DataPoint[]> dps) {
+    public float size(long startTime, long endTime, int samplingInterval, List<DataPoint[]> dps) {
         if (this.currentSize == 0) {
             return Float.NaN;
         } else {
@@ -140,10 +136,10 @@ class FacebookGorillaModel extends Model {
 class FacebookGorillaSegment extends Segment {
 
     /** Constructors **/
-    FacebookGorillaSegment(int sid, long startTime, long endTime, int resolution, byte[] parameters, byte[] offsets) {
+    FacebookGorillaSegment(int tid, long startTime, long endTime, int samplingInterval, byte[] model, byte[] offsets) {
         //Unlike length(), capacity() is not impacted by changes to the segment's start time
-        super(sid, startTime, endTime, resolution, offsets);
-        this.values = decompress(parameters, super.capacity());
+        super(tid, startTime, endTime, samplingInterval, offsets);
+        this.values = decompress(model, super.capacity());
     }
 
     /** Public Methods **/

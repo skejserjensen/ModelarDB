@@ -1,4 +1,4 @@
-/* Copyright 2018 The ModelarDB Contributors
+/* Copyright 2021 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,35 +12,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dk.aau.modelardb.core.utility;
+package dk.aau.modelardb.core.timeseries;
 
 import dk.aau.modelardb.core.DataPoint;
 
-import java.util.ArrayList;
+import java.io.Serializable;
 import java.util.Iterator;
 
-public class ReverseBufferIterator implements Iterator<DataPoint> {
-
-    /** Constructors **/
-    public ReverseBufferIterator(ArrayList<DataPoint[]> list, int source) {
-        this.index = list.size();
-        this.list = list;
+public abstract class TimeSeries implements  Serializable, Iterator<DataPoint> {
+    /** Public Methods **/
+    public TimeSeries(String source, int tid, int samplingInterval) {
         this.source = source;
+        this.tid = tid;
+        this.samplingInterval = samplingInterval;
+        this.scalingFactor = 1.0F;
     }
-
-    @Override
-    public boolean hasNext() {
-        return this.index > 0;
-    }
-
-    @Override
-    public DataPoint next() {
-        this.index -= 1;
-        return this.list.get(this.index)[source];
-    }
+    abstract public void open();
+    abstract public void close();
 
     /** Instance Variables **/
-    private final int source;
-    private int index;
-    private final ArrayList<DataPoint[]> list;
+    public final String source;
+    public final int tid;
+    public final int samplingInterval;
+    public float scalingFactor;
 }

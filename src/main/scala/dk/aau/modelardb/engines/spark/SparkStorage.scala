@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,13 @@
  */
 package dk.aau.modelardb.engines.spark
 
-import dk.aau.modelardb.core.Dimensions
+import dk.aau.modelardb.core.{Dimensions, Storage}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.{Row, SparkSession}
 
-trait SparkStorage {
-  //Opens a connection to a segment group store with Spark integration
+trait SparkStorage extends Storage {
   def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession
-
-  //Writes an RDD of segments to the segment group store
-  def writeRDD(rdd: RDD[Row]): Unit
-
-  //Reads an RDD of segments from the segment group store
-  def getRDD(filters: Array[Filter]): RDD[Row]
+  def storeSegmentGroups(sparkSession: SparkSession, rdd: RDD[Row]): Unit
+  def getSegmentGroups(sparkSession: SparkSession, filters: Array[Filter]): RDD[Row]
 }

@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
  */
 package dk.aau.modelardb.core;
 
+import dk.aau.modelardb.core.timeseries.TimeSeries;
 import dk.aau.modelardb.core.utility.Pair;
 
 import java.util.ArrayList;
@@ -98,36 +99,18 @@ public class Dimensions {
         return this.types;
     }
 
-    public String getSchema() {
-        if (this.types.length == 0) {
-            return "";
-        }
-
-        //The schema is build with a starting comma so it is easy to embed into a CREATE table statement
-        StringBuilder sb = new StringBuilder();
-        sb.append(", ");
-        int withPunctuation = this.columns.length - 1;
-        for (int i = 0; i <  withPunctuation; i++) {
-            sb.append(this.columns[i]);
-            sb.append(' ');
-            sb.append(this.types[i].toString());
-            sb.append(", ");
-        }
-        sb.append(this.columns[withPunctuation]);
-        sb.append(' ');
-        sb.append(this.types[withPunctuation].toString());
-        return sb.toString();
-    }
-
     public float getLowestNoneZeroDistance() {
-        float highestLevelCount = this.dims.entrySet().stream().mapToInt(dim ->
-                (dim.getValue()._2 - dim.getValue()._1 + 1)).max().getAsInt();
+        if (this.names.length == 0) {
+            throw new IllegalArgumentException("CORE: grouping by dimensions requires a dimensions file");
+        }
+
+        float highestLevelCount = this.dims.values().stream().mapToInt(dim -> (dim._2 - dim._1 + 1)).max().getAsInt();
         return (float) (1.0 / highestLevelCount / this.names.length);
     }
 
     public boolean correlatedByLCALevels(TimeSeries[] tsgA, TimeSeries[] tsgB, HashMap<Integer, Integer> correlation) {
         //Ensures that dimensions are available before grouping
-        if (this.names == null) {
+        if (this.names.length == 0) {
             throw new IllegalArgumentException("CORE: grouping by dimensions requires a dimensions file");
         }
 
@@ -145,7 +128,7 @@ public class Dimensions {
 
     public boolean correlatedByDistance(TimeSeries[] tsgA, TimeSeries[] tsgB, float distanceBound) {
         //Ensures that dimensions are available before grouping
-        if (this.names == null) {
+        if (this.names.length == 0) {
             throw new IllegalArgumentException("CORE: grouping by dimensions require a dimensions file");
         }
 
@@ -192,7 +175,7 @@ public class Dimensions {
             }
         }
         catch (NumberFormatException nfe){
-            throw new IllegalArgumentException("CORE: \"" + member+ "\" is not a \"" + this.types[index] + "\"");
+            throw new IllegalArgumentException("CORE: \"" + member+ "\" is not a \"" + this.types[index] + "\"", nfe);
         }
     }
 
@@ -203,9 +186,7 @@ public class Dimensions {
         if  ( ! this.rows.isEmpty()) {
             indent = this.rows.keySet().iterator().next().length() + 3;
         }
-        for (int i = 0; i < indent; i++) {
-            sb.append(' ');
-        }
+        sb.append(" ".repeat(indent));
 
         //Adds the header
         int withComma = this.columns.length - 1;
@@ -280,7 +261,7 @@ public class Dimensions {
                 }
             }
             catch (NumberFormatException nfe){
-                throw new IllegalArgumentException("CORE: \"" + line + "\" is not a \"" + this.types[i] + "\"");
+                throw new IllegalArgumentException("CORE: \"" + line + "\" is not a \"" + this.types[i] + "\"", nfe);
             }
         }
         return parsed;
@@ -319,12 +300,12 @@ public class Dimensions {
     }
 
     /** Instance Variables **/
-    private String[] names;
-    private HashMap<String, Pair<Integer, Integer>> dims;
-    private Object[] emptyRow;
-    private double[] weights;
-    private String[] columns;
-    private Dimensions.Types[] types;
-    private HashMap<String, Object[]> rows;
+    private final String[] names;
+    private final HashMap<String, Pair<Integer, Integer>> dims;
+    private final Object[] emptyRow;
+    private final double[] weights;
+    private final String[] columns;
+    private final Dimensions.Types[] types;
+    private final HashMap<String, Object[]> rows;
     public enum Types {INT, LONG, FLOAT, DOUBLE, TEXT}
 }

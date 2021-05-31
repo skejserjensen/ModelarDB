@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,26 +14,26 @@
  */
 package dk.aau.modelardb.engines.spark
 
-import java.sql.Timestamp
-
 import dk.aau.modelardb.core.SegmentGroup
 import dk.aau.modelardb.core.utility.Static
+import dk.aau.modelardb.engines.EngineUtilities
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources.{BaseRelation, Filter, PrunedFilteredScan}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{Row, SQLContext, sources}
 
+import java.sql.Timestamp
+
 class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQLContext)
   extends BaseRelation with PrunedFilteredScan {
 
   /** Public Methods **/
-  override def schema = StructType(Seq(
-    StructField("sid", IntegerType, nullable = false),
-    StructField("st", TimestampType, nullable = false),
-    StructField("et", TimestampType, nullable = false),
-    StructField("res", IntegerType, nullable = false),
-    StructField("mid", IntegerType, nullable = false),
-    StructField("param", BinaryType, nullable = false),
+  override def schema: StructType = StructType(Seq(
+    StructField("tid", IntegerType, nullable = false),
+    StructField("start_time", TimestampType, nullable = false),
+    StructField("end_time", TimestampType, nullable = false),
+    StructField("mtid", IntegerType, nullable = false),
+    StructField("model", BinaryType, nullable = false),
     StructField("gaps", BinaryType, nullable = false))
     ++ dimensions)
 
@@ -48,28 +48,24 @@ class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQ
     val segmentGroupRows = getSegmentGroupRDD(filters)
     val segmentGroupRowToSegmentRows = getSegmentGroupRowToSegmentRows
     val segmentRows = segmentGroupRows.flatMap(segmentGroupRowToSegmentRows(_))
-    SparkGridder.segmentProjection(segmentRows, requiredColumns)
+    SparkProjector.segmentProjection(segmentRows, requiredColumns)
   }
 
   /** Private Methods **/
   private def getSegmentGroupRDD(filters: Array[Filter]): RDD[Row] = {
-    //Sids and members are mapped to Gids so only segments from the necessary groups are retrieved
-    val sgc = Spark.getStorage.getSourceGroupCache
-    val idc = Spark.getStorage.getInverseDimensionsCache
-
-    val maxSid = sgc.length
+    //Tids and members are mapped to Gids so only segments from the necessary groups are retrieved
+    val tsgc = Spark.getSparkStorage.timeSeriesGroupCache
+    val mtsc = Spark.getSparkStorage.memberTimeSeriesCache
     val gidFilters: Array[Filter] = filters.map {
-      case sources.EqualTo("sid", sid: Int) => sidPointToGidPoint(sid, sgc)
-      case sources.EqualNullSafe("sid", sid: Int) => sidPointToGidPoint(sid, sgc)
-      case sources.GreaterThan("sid", sid: Int) => sidRangeToGidIn(sid + 1, maxSid, sgc, maxSid)
-      case sources.GreaterThanOrEqual("sid", sid: Int) => sidRangeToGidIn(sid, maxSid, sgc, maxSid)
-      case sources.LessThan("sid", sid: Int) => sidRangeToGidIn(0, sid - 1, sgc, maxSid)
-      case sources.LessThanOrEqual("sid", sid: Int) => sidRangeToGidIn(0, sid, sgc, maxSid)
-      case sources.In("sid", values: Array[Any]) => sidInToGidIn(values, sgc, maxSid)
-      case sources.IsNull("sid") => sources.IsNull("gid")
-      case sources.IsNotNull("sid") => sources.IsNotNull("gid")
-      case sources.EqualTo(column: String, value: Any) if idc.containsKey(column) =>
-        sources.In("gid", idc.get(column).getOrDefault(value, Array(new Integer(-1))).asInstanceOf[Array[Any]])
+      case sources.EqualTo("tid", tid: Int) => sources.EqualTo("gid", EngineUtilities.tidPointToGidPoint(tid, tsgc))
+      case sources.EqualNullSafe("tid", tid: Int) => sources.EqualTo("gid", EngineUtilities.tidPointToGidPoint(tid, tsgc))
+      case sources.GreaterThan("tid", tid: Int) => sources.In("gid", EngineUtilities.tidRangeToGidIn(tid + 1, tsgc.length, tsgc))
+      case sources.GreaterThanOrEqual("tid", tid: Int) => sources.In("gid", EngineUtilities.tidRangeToGidIn(tid, tsgc.length, tsgc))
+      case sources.LessThan("tid", tid: Int) => sources.In("gid", EngineUtilities.tidRangeToGidIn(0, tid - 1, tsgc))
+      case sources.LessThanOrEqual("tid", tid: Int) => sources.In("gid", EngineUtilities.tidRangeToGidIn(0, tid, tsgc))
+      case sources.In("tid", values: Array[Any]) => sources.In("gid", EngineUtilities.tidInToGidIn(values, tsgc))
+      case sources.EqualTo(column: String, value: Any) if mtsc.containsKey(column.toUpperCase) => //mtsc's keys are uppercase for consistency
+        sources.In("gid", EngineUtilities.dimensionEqualToGidIn(column, value, mtsc))
       case f => f
     }
 
@@ -78,46 +74,15 @@ class ViewSegment(dimensions: Array[StructField]) (@transient val sqlContext: SQ
     this.cache.getSegmentGroupRDD(gidFilters)
   }
 
-  private def sidPointToGidPoint(sid: Int, sgc: Array[Int]): Filter = {
-    if (sid < sgc.length) {
-      sources.EqualTo("gid", sgc(sid))
-    } else {
-      sources.EqualTo("gid", -1)
-    }
-  }
-
-  private def sidRangeToGidIn(startSid: Int, endSid: Int, sgc: Array[Int], maxSid: Int): Filter = {
-    if (endSid <= 0 || startSid >= maxSid) {
-      //All sids are outside the range of assigned sids, so a sentinel is used to ensure no gids match
-      return sources.EqualTo("gid", -1)
-    }
-
-    //All sids within the range of assigned sids are translated with the set removing duplicates
-    val sids = scala.collection.mutable.Set[Int]()
-    for (sid <- Math.max(startSid, 1) to Math.min(endSid, maxSid)) {
-      sids.add(sgc(sid))
-    }
-    sources.In("gid", sids.toArray)
-  }
-
-  private def sidInToGidIn(sids: Array[Any], sgc: Array[Int], maxSid: Int): Filter = {
-    sources.In("gid",
-      sids.map(obj => {
-        val sid = obj.asInstanceOf[Int]
-        if (sid <= 0 || maxSid < sid) -1 else sgc(sid)
-      }))
-  }
-
   private def getSegmentGroupRowToSegmentRows: Row => Array[Row] = {
-    val storage = Spark.getStorage
-    val gmdc = storage.getGroupMetadataCache
+    val storage = Spark.getSparkStorage
+    val gmdc = storage.groupMetadataCache
+    val gdc = storage.groupDerivedCache
     row =>
       val sg = new SegmentGroup(row.getInt(0), row.getTimestamp(1).getTime, row.getTimestamp(2).getTime,
         row.getInt(3), row.getAs[Array[Byte]](4), row.getAs[Array[Byte]](5))
-      val exploded = sg.explode(gmdc)
-      val resolution = gmdc(sg.gid)(0)
-      exploded.map(e =>
-        Row(e.gid, new Timestamp(e.startTime), new Timestamp(e.endTime), resolution, e.mid, e.parameters, e.offsets))
+      sg.explode(gmdc, gdc).map(e =>
+        Row(e.gid, new Timestamp(e.startTime), new Timestamp(e.endTime), e.mtid, e.model, e.offsets))
   }
 
   /** Instance Variables **/

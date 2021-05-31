@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ public class BitBuffer {
 
     public void writeBits(int value, int bits) {
         while (bits > 0) {
-            int bitsToWrite = 0;
+            int bitsToWrite;
             if (bits > this.bitsLeft) {
                 bitsToWrite = this.bitsLeft;
                 int shift = bits - this.bitsLeft;

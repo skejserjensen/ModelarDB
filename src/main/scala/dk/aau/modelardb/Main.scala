@@ -1,4 +1,4 @@
-/* Copyright 2018-2020 Aalborg University
+/* Copyright 2018 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,17 @@
  */
 package dk.aau.modelardb
 
-import java.io.File
-import java.nio.file.{FileSystems, Paths}
-
 import dk.aau.modelardb.core._
-import dk.aau.modelardb.core.utility.Static
-import dk.aau.modelardb.engines.EngineFactory
+import dk.aau.modelardb.core.models.ModelTypeFactory
+import dk.aau.modelardb.core.utility.{Pair, Static, ValueFunction}
+import dk.aau.modelardb.engines.{CodeGenerator, EngineFactory}
 import dk.aau.modelardb.storage.StorageFactory
 
+import java.io.File
+import java.nio.file.{FileSystems, Paths}
+import java.util
+import java.util.TimeZone
+import java.util.concurrent.Executors
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
@@ -46,20 +49,16 @@ object Main {
 
     /* Configuration */
     val configuration = readConfigurationFile(configPath)
+    TimeZone.setDefault(configuration.getTimeZone) //Ensures all components use the same time zone
 
     /* Storage */
     val storage = StorageFactory.getStorage(configuration.getString("modelardb.storage"))
 
     /* Engine */
-    EngineFactory.startEngine(
-      configuration.getString("modelardb.interface"), configuration.getString("modelardb.engine"),
-      storage, configuration.getModels, configuration.getInteger("modelardb.batch"))
+    EngineFactory.startEngine(configuration, storage)
 
     /* Cleanup */
     storage.close()
-
-    //HACK: some engine and storage providers makes the main process hang despite being terminated beforehand
-    Static.SIGTERM()
   }
 
   /** Private Methods **/
@@ -68,44 +67,57 @@ object Main {
     val configuration = new Configuration()
     val models = ArrayBuffer[String]()
     val sources = ArrayBuffer[String]()
+    val derivedSources = new util.HashMap[String, ArrayBuffer[Pair[String, ValueFunction]]]()
     val correlations = ArrayBuffer[Correlation]()
 
 
     //The information about dimensions are extracted first so correlation objects can depends on it being available
-    val dimensionLines = Source.fromFile(configPath).getLines().map(_.trim).filter(_.startsWith("modelardb.dimensions"))
-    val dimensions: Dimensions = if (dimensionLines.nonEmpty) {
-      val lineSplit = dimensionLines.toStream.last.trim().split(" ", 2)
-      configuration.add("modelardb.dimensions", readDimensionsFile(lineSplit(1)))
-      configuration.getDimensions
+    val configDimensionsSource = Source.fromFile(configPath)
+    val dimensionLine = configDimensionsSource.getLines().map(_.trim).filter(_.startsWith("modelardb.dimensions"))
+    val dimensions: Dimensions = if (dimensionLine.nonEmpty) {
+      val lineSplit = dimensionLine.toStream.last.trim().split(" ", 2)
+      configuration.add("modelardb.dimensions", readDimensionsFile(lineSplit(1))).asInstanceOf[Dimensions]
     } else {
-      null
+      //The user have not specified any dimensions
+      configuration.add("modelardb.dimensions", new Dimensions(Array())).asInstanceOf[Dimensions]
     }
+    configDimensionsSource.close()
 
     //Parses everything but modelardb.dimensions as dimensions are already initialized
-    for (line <- Source.fromFile(configPath).getLines().filter(_.nonEmpty)) {
+    val configFullSource = Source.fromFile(configPath)
+    for (line <- configFullSource.getLines().filter(_.nonEmpty)) {
       //Parsing is performed naively and will terminate if the config is malformed
       val lineSplit = line.trim().split(" ", 2)
       lineSplit(0) match {
-        case "modelardb.model" => models.append(lineSplit(1))
+        case "modelardb.model_type" => models.append(lineSplit(1))
         case "modelardb.source" => appendSources(lineSplit(1), sources)
+        case "modelardb.source.derived" =>
+          //Store a mapping from the original source to the derived source and the function to map over its values
+          val derived = lineSplit(1).split(' ').map(_.trim)
+          val transformation = CodeGenerator.getValueFunction(derived(2))
+          if ( ! derivedSources.containsKey(derived(0))) {
+            derivedSources.put(derived(0), ArrayBuffer[Pair[String, ValueFunction]]())
+          }
+          derivedSources.get(derived(0)).append(new Pair(derived(1), transformation))
         case "modelardb.dimensions" => //Purposely empty as modelardb.dimensions have already been parsed
         case "modelardb.correlation" =>
           //If the value is a file each line is considered a clause
           val tls = lineSplit(1).trim
           if (new File(tls).exists()) {
-            for (line <- Source.fromFile(tls).getLines()) {
+            val correlationSource = Source.fromFile(tls)
+            for (line <- correlationSource.getLines()) {
               correlations.append(parseCorrelation(line, dimensions))
             }
+            correlationSource.close()
           } else {
             correlations.append(parseCorrelation(tls, dimensions))
           }
-        case "modelardb.resolution" =>
-          //Java, in general, works with timestamps in milliseconds, but modelardb.resolution is in seconds
-          configuration.add("modelardb.resolution", (lineSplit(1).toDouble * 1000).toInt)
-        case "modelardb.engine" | "modelardb.interface" | "modelardb.latency" | "modelardb.limit" | "modelardb.batch" |
-             "modelardb.dynamicsplitfraction"  | "modelardb.storage" | "modelardb.separator" | "modelardb.header" |
-             "modelardb.timestamps" | "modelardb.dateformat" | "modelardb.timezone" | "modelardb.values" |
-             "modelardb.locale" | "modelardb.error" | "modelardb.spark.streaming" | "modelardb.spark.receivers" =>
+        case "modelardb.engine" | "modelardb.storage" | "modelardb.interface" | "modelardb.time_zone" |
+             "modelardb.ingestors" | "modelardb.timestamp_column" | "modelardb.value_column" |
+             "modelardb.error_bound" | "modelardb.length_bound" | "modelardb.maximum_latency" |
+             "modelardb.sampling_interval" | "modelardb.batch_size" | "modelardb.dynamic_split_fraction"  |
+             "modelardb.csv.separator" | "modelardb.csv.header" | "modelardb.csv.date_format" | "modelardb.csv.locale" |
+             "modelardb.spark.streaming" =>
           configuration.add(lineSplit(0), lineSplit(1).stripPrefix("'").stripSuffix("'"))
         case _ =>
           if (lineSplit(0).charAt(0) != '#') {
@@ -113,11 +125,20 @@ object Main {
           }
       }
     }
+    configFullSource.close()
 
-    configuration.add("modelardb.model", models.toArray)
-    configuration.add("modelardb.source", sources.toArray)
-    configuration.add("modelardb.correlation", correlations.toArray)
-    configuration
+    configuration.add("modelardb.model_types", models.toArray)
+    configuration.add("modelardb.sources", sources.toArray)
+    val finalDerivedSources = new util.HashMap[String, Array[Pair[String, ValueFunction]]]()
+    val dsIter = derivedSources.entrySet().iterator()
+    while (dsIter.hasNext) {
+      val entry = dsIter.next()
+      finalDerivedSources.put(entry.getKey, entry.getValue.toArray)
+    }
+    configuration.add("modelardb.sources.derived", finalDerivedSources)
+    configuration.add("modelardb.correlations", correlations.toArray)
+    configuration.add("modelardb.executor_service", Executors.newCachedThreadPool())
+    validate(configuration)
   }
 
   private def appendSources(pathName: String, sources: ArrayBuffer[String]): Unit = {
@@ -146,11 +167,6 @@ object Main {
 
   private def readDimensionsFile(dimensionPath: String): Dimensions = {
     Static.info(s"ModelarDB: $dimensionPath")
-    //The user explicitly specified that no dimensions exist
-    if (dimensionPath.equalsIgnoreCase("none")) {
-      return new Dimensions(Array())
-    }
-
     //Checks if the user has specified a schema inline, and if not, ensures that the dimensions file exists
     if ( ! new File(dimensionPath).exists()) {
       val dimensions = dimensionPath.split(';').map(_.trim)
@@ -162,7 +178,8 @@ object Main {
     }
 
     //Parses a dimensions file with the format (Dimension Definition+, Empty Line, Row+)
-    val lines = Source.fromFile(dimensionPath).getLines()
+    val dimensionSource = Source.fromFile(dimensionPath)
+    val lines = dimensionSource.getLines()
     var line: String = " "
 
     //Parses each dimension definition in the dimensions file
@@ -186,6 +203,7 @@ object Main {
         dimensions.add(line)
       }
     }
+    dimensionSource.close()
     dimensions
   }
 
@@ -193,7 +211,7 @@ object Main {
     //The line is split into correlations and scaling factors
     var split = line.split('*')
     val correlations = split(0).split(',').map(_.trim)
-    val scaling = if (split.length > 1) split(1).split(',').map(_.trim) else Array[String]()
+    val scaling_factor = if (split.length > 1) split(1).split(',').map(_.trim) else Array[String]()
     val correlation = new Correlation()
 
     //Correlation is either specified as a set of sources, a set of LCA levels, a set of members, or a distance
@@ -218,7 +236,7 @@ object Main {
     }
 
     //Scaling factors are set for time series from specific sources, or for time series with specific members
-    for (elem <- scaling) {
+    for (elem <- scaling_factor) {
       split = elem.split(' ')
       if (split.length == 2) {
         //Sets the scaling factor for time series from specific sources
@@ -231,5 +249,18 @@ object Main {
       }
     }
     correlation
+  }
+
+  private def validate(configuration: Configuration): Configuration = {
+    //Settings used outside core are validated to ensure their values are within the expected range
+    if (configuration.getInteger("modelardb.spark.streaming", 0) <= 0) {
+      throw new UnsupportedOperationException ("ModelarDB: modelardb.spark.streaming must be a positive number of seconds between micro-batches")
+    }
+
+    //Ensure both included and user-defined model types all can be constructed without errors
+    val mtn = configuration.getModelTypeNames
+    val mtids = Range(1, mtn.length + 1).toArray
+    ModelTypeFactory.getModelTypes(mtn, mtids, configuration.getErrorBound, configuration.getLengthBound)
+    configuration
   }
 }
