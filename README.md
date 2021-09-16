@@ -1,16 +1,17 @@
 # ModelarDB
-ModelarDB is a modular model-based time series management system that interfaces
-a query engine and a storage system with ModelarDB Core. This Core is a
-self-contained, adaptive, and highly extensible Java library for automatic online
-compression of time series. ModelarDB is designed for Unix-like operating
-systems and tested on Linux and macOS.
+ModelarDB is a modular model-based time series management system that
+interfaces a query engine and a storage system with ModelarDB Core. This Core
+is a self-contained, adaptive, and highly extensible Java library for automatic
+online compression of time series. ModelarDB is designed for Unix-like
+operating systems and tested on Linux and macOS.
 
-We are always happy to hear from anybody who tries ModelarDB. From experience
-reports, we get a better understanding of the system's current limitations and
-how to continue improving it. For any comment or requests regarding ModelarDB
-please use GitHub issues so the discussion is kept public. For discussions that
-cannot be public, you can, however, send us a private
-[email](mailto:skj@cs.aau.dk "email").
+This repository primarily contains the static source code for the versions of
+ModelalDB documented in the [papers listed
+below](https://github.com/skejserjensen/ModelarDB#papers). The system is being
+actively developed as an open-source project at
+[ModelarDB](https://github.com/ModelarData/ModelarDB). While a re-design and
+re-implementation in Rust is being actively developed as an open-source project
+at [MiniModelarDB](https://github.com/ModelarData/MiniModelarDB).
 
 ## Installation
 1. Install the Scala Build Tool (sbt).
