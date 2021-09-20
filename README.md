@@ -43,7 +43,7 @@ ModelarDB in academia, please cite the relevant paper(s) below.
 ***Scalable Model-Based Management of Correlated Dimensional Time Series in ModelarDB+***\
 by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
 in *The Proceedings of ICDE, 1380-1391, 2021*\
-Links: [IEEE](https://ieeexplore.ieee.org/document/9458830), [arXiv](https://arxiv.org/abs/1903.10269)
+Links: [IEEE](https://ieeexplore.ieee.org/document/9458830), [arXiv (preprint)](https://arxiv.org/abs/1903.10269)
 
 ***Model-Based Time Series Management at Scale***\
 by Søren Kejser Jensen\
@@ -63,7 +63,7 @@ Links: [PVLDB](http://www.vldb.org/pvldb/vol11/p1688-jensen.pdf)
 ***Time Series Management Systems: A Survey***\
 by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
 in *IEEE Transactions on Knowledge and Data Engineering, 29(11): 2581–2600, 2017*\
-Links: [IEEE](https://ieeexplore.ieee.org/document/8012550/), [arXiv](https://arxiv.org/abs/1710.01077)
+Links: [IEEE](https://ieeexplore.ieee.org/document/8012550/), [arXiv (preprint)](https://arxiv.org/abs/1710.01077)
 
 ## Presentations
 The research leading to ModelarDB has also been presented at multiple events.
