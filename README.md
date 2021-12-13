@@ -69,6 +69,21 @@ Links: [IEEE](https://ieeexplore.ieee.org/document/8012550/), [arXiv (preprint)]
 The research leading to ModelarDB has also been presented at multiple events.
 The slides used are available below:
 
+***Model-based storage and management of massive sensor time series***\
+by Christian Thomsen\
+at *Digital Tech Summit, 2021*\
+Links: [Slides](slides/2021-12-01_DTS.pdf), [Event](https://my.eventbuizz.com/event/digital-tech-summit-8890/detail)
+
+***Extreme-Scale Model-Based Time Series Management with ModelarDB***\
+by Torben Bach Pedersen as a Keynote Speaker\
+at the *32nd International Conference on Database and Expert Systems Applications, 2021*\
+Links: [Slides](slides/2021-09-30_DEXA-Keynote.pdf), [Event](http://www.dexa.org/previous/dexa2021/keynotes2021.html#keynote3)
+
+***Extreme-Scale Model-Based Time Series Management with ModelarDB***\
+by Torben Bach Pedersen as a Keynote Speaker\
+at the *28th International Symposium on Temporal Representation and Reasoning, 2021*\
+Links: [Slides](slides/2021-09-28_TIME-Keynote.pdf), [Abstract](https://drops.dagstuhl.de/opus/volltexte/2021/14778/), [Event](https://conference2.aau.at/event/61/page/46-time-2021)
+
 ***Extreme-Scale Model-Based Time Series Management with ModelarDB***\
 by Torben Bach Pedersen as a Keynote Speaker\
 at the *10th International Conference on Model and Data Engineering, 2021*\
