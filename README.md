@@ -5,13 +5,14 @@ is a self-contained, adaptive, and highly extensible Java library for automatic
 online compression of time series. ModelarDB is designed for Unix-like
 operating systems and tested on Linux and macOS.
 
-This repository primarily contains the static source code for the versions of
-ModelalDB documented in the [papers listed
-below](https://github.com/skejserjensen/ModelarDB#papers). The system is being
-actively developed as an open-source project at
-[ModelarDB](https://github.com/ModelarData/ModelarDB). While a re-design and
-re-implementation in Rust is being actively developed as an open-source project
-at [MiniModelarDB](https://github.com/ModelarData/MiniModelarDB).
+This repository primarily contains the static source code for the legacy
+JVM-based versions of ModelarDB documented in the [papers listed
+below](https://github.com/skejserjensen/ModelarDB#papers). A re-design and
+re-implementation in Rust is currently being developed as an open-source project
+at [ModelarDB](https://github.com/ModelarData/ModelarDB-RS). Thus, [this
+Rust-based version of ModelarDB](https://github.com/ModelarData/ModelarDB-RS) is
+under active development, while [the legacy JVM-based version of
+ModelarDB](https://github.com/ModelarData/ModelarDB) is not.
 
 ## Installation
 1. Install the Scala Build Tool (sbt).
