@@ -15,17 +15,18 @@
 package dk.aau.modelardb.storage
 
 import dk.aau.modelardb.core._
-import dk.aau.modelardb.core.utility.{Pair, Static, ValueFunction}
+import dk.aau.modelardb.core.utility.Static
 import dk.aau.modelardb.engines.h2.{H2, H2Storage}
-import dk.aau.modelardb.engines.spark.SparkStorage
-import org.apache.spark.rdd.RDD
+import dk.aau.modelardb.engines.spark.{Spark, SparkStorage}
+
 import org.apache.spark.sql.sources.Filter
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.h2.table.TableFilter
 
 import java.sql.{Array => _, _}
-import java.util
-import scala.collection.JavaConverters._
+import java.lang
+
+import scala.collection.mutable
 
 class JDBCStorage(connectionStringAndTypes: String) extends Storage with H2Storage with SparkStorage {
 
@@ -58,84 +59,75 @@ class JDBCStorage(connectionStringAndTypes: String) extends Storage with H2Stora
     this.getMaxGidStmt = this.connection.prepareStatement("SELECT MAX(gid) FROM time_series")
   }
 
-  override def initialize(timeSeriesGroups: Array[TimeSeriesGroup],
-                          derivedTimeSeries: util.HashMap[Integer, Array[Pair[String, ValueFunction]]],
-                          dimensions: Dimensions, modelNames: Array[String]): Unit = {
-    //Inserts the metadata for the sources defined in the configuration file (Tid, Sampling Interval, Gid, Dimensions)
-    val columnsInNormalizedDimensions = dimensions.getColumns.length
+  def storeTimeSeries(timeSeriesGroupRows: Array[Array[Object]]): Unit = {
+    val columnsInNormalizedDimensions = this.dimensions.getColumns.length
     val columns = "?, " * (columnsInNormalizedDimensions + 3) + "?"
-    val insertSourceStmt = connection.prepareStatement("INSERT INTO time_series VALUES(" + columns + ")")
-    val dimensionTypes = dimensions.getTypes
-    for (tsg <- timeSeriesGroups) {
-      for (ts <- tsg.getTimeSeries) {
-        insertSourceStmt.clearParameters()
-        insertSourceStmt.setInt(1, ts.tid)
-        insertSourceStmt.setFloat(2, ts.scalingFactor)
-        insertSourceStmt.setInt(3, ts.samplingInterval)
-        insertSourceStmt.setInt(4, tsg.gid)
-
-        var column = 5
-        for (dim <- dimensions.get(ts.source)) {
-          dimensionTypes(column - 5) match {
-            case Dimensions.Types.TEXT => insertSourceStmt.setString(column, dim.asInstanceOf[String])
-            case Dimensions.Types.INT => insertSourceStmt.setInt(column, dim.asInstanceOf[Int])
-            case Dimensions.Types.LONG => insertSourceStmt.setLong(column, dim.asInstanceOf[Long])
-            case Dimensions.Types.FLOAT => insertSourceStmt.setFloat(column, dim.asInstanceOf[Float])
-            case Dimensions.Types.DOUBLE => insertSourceStmt.setDouble(column, dim.asInstanceOf[Double])
-          }
-          column += 1
+    val insertSourceStmt = this.connection.prepareStatement("INSERT INTO time_series VALUES(" + columns + ")")
+    for (row <- timeSeriesGroupRows) {
+      insertSourceStmt.clearParameters()
+      for (elementAndIndex <- row.zipWithIndex) {
+        val jdbcIndex = elementAndIndex._2 + 1
+        elementAndIndex._1 match {
+          case elem: lang.String => insertSourceStmt.setString(jdbcIndex, elem)
+          case elem: lang.Integer => insertSourceStmt.setInt(jdbcIndex, elem)
+          case elem: lang.Long => insertSourceStmt.setLong(jdbcIndex, elem)
+          case elem: lang.Float => insertSourceStmt.setFloat(jdbcIndex, elem)
+          case elem: lang.Double => insertSourceStmt.setDouble(jdbcIndex, elem)
         }
-        insertSourceStmt.executeUpdate()
       }
+      insertSourceStmt.executeUpdate()
     }
+  }
 
-    //Extracts the scaling factor, sampling interval, gid, and dimensions for the time series in storage
-    var stmt = this.connection.createStatement()
-    var results = stmt.executeQuery("SELECT * FROM time_series")
-    val timeSeriesInStorage = new util.HashMap[Integer, Array[Object]]()
+  def getTimeSeries: mutable.HashMap[Integer, Array[Object]] = {
+    val columnsInNormalizedDimensions = dimensions.getColumns.length
+    val stmt = this.connection.createStatement()
+    val results = stmt.executeQuery("SELECT * FROM time_series")
+    val timeSeriesInStorage = mutable.HashMap[Integer, Array[Object]]()
     while (results.next) {
       //The metadata is stored as (Tid => Scaling Factor, Sampling Interval, Gid, Dimensions)
       val tid = results.getInt(1) //Tid
-      val metadata = new util.ArrayList[Object]()
-      metadata.add(results.getFloat(2).asInstanceOf[Object]) //Scaling Factor
-      metadata.add(results.getInt(3).asInstanceOf[Object]) //Sampling Interval
-      metadata.add(results.getInt(4).asInstanceOf[Object]) //Gid
+      val metadata = mutable.ArrayBuffer[Object]()
+      metadata += results.getFloat(2).asInstanceOf[Object] //Scaling Factor
+      metadata += results.getInt(3).asInstanceOf[Object] //Sampling Interval
+      metadata += results.getInt(4).asInstanceOf[Object] //Gid
 
       //Dimensions
       var column = 5
+      val dimensionTypes = dimensions.getTypes
       while(column <= columnsInNormalizedDimensions + 4) {
         dimensionTypes(column - 5) match {
-          case Dimensions.Types.TEXT => metadata.add(results.getString(column).asInstanceOf[Object])
-          case Dimensions.Types.INT => metadata.add(results.getInt(column).asInstanceOf[Object])
-          case Dimensions.Types.LONG => metadata.add(results.getLong(column).asInstanceOf[Object])
-          case Dimensions.Types.FLOAT => metadata.add(results.getFloat(column).asInstanceOf[Object])
-          case Dimensions.Types.DOUBLE => metadata.add(results.getDouble(column).asInstanceOf[Object])
+          case Dimensions.Types.TEXT => metadata += results.getString(column).asInstanceOf[Object]
+          case Dimensions.Types.INT => metadata += results.getInt(column).asInstanceOf[Object]
+          case Dimensions.Types.LONG => metadata += results.getLong(column).asInstanceOf[Object]
+          case Dimensions.Types.FLOAT => metadata += results.getFloat(column).asInstanceOf[Object]
+          case Dimensions.Types.DOUBLE => metadata += results.getDouble(column).asInstanceOf[Object]
         }
         column += 1
       }
       timeSeriesInStorage.put(tid, metadata.toArray)
     }
+    timeSeriesInStorage
+  }
 
-
-    //Extracts the name of all models in storage
-    stmt = this.connection.createStatement()
-    results = stmt.executeQuery("SELECT * FROM model_type")
-    val modelsInStorage = new util.HashMap[String, Integer]()
-    while (results.next) {
-      modelsInStorage.put(results.getString(2), results.getInt(1))
-    }
-
-    //Initializes the caches managed by Storage
-    val modelsToInsert = super.initializeCaches(modelNames, dimensions, modelsInStorage, timeSeriesInStorage, derivedTimeSeries)
-
-    //Inserts the name of each model in the configuration file but not in the model table
+  def storeModelTypes(modelsToInsert: mutable.HashMap[String, Integer]): Unit = {
     val insertModelStmt = connection.prepareStatement("INSERT INTO model_type VALUES(?, ?)")
-    for ((k, v) <- modelsToInsert.asScala) {
+    for ((k, v) <- modelsToInsert) {
       insertModelStmt.clearParameters()
       insertModelStmt.setInt(1, v)
       insertModelStmt.setString(2, k)
       insertModelStmt.executeUpdate()
     }
+  }
+
+  def getModelTypes: mutable.HashMap[String, Integer] = {
+    val stmt = this.connection.createStatement()
+    val results = stmt.executeQuery("SELECT * FROM model_type")
+    val modelsInStorage = mutable.HashMap[String, Integer]()
+    while (results.next) {
+      modelsInStorage.put(results.getString(2), results.getInt(1))
+    }
+    modelsInStorage
   }
 
   override def getMaxTid: Int = {
@@ -153,9 +145,10 @@ class JDBCStorage(connectionStringAndTypes: String) extends Storage with H2Stora
   }
 
   //H2Storage
-  override def storeSegmentGroups(segments: Array[SegmentGroup], size: Int): Unit = {
+  override def storeSegmentGroups(segmentGroups: Array[SegmentGroup]): Unit = {
+    this.storageSegmentGroupLock.writeLock().lock()
     try {
-      for (segmentGroup <- segments.take(size)) {
+      for (segmentGroup <- segmentGroups) {
         this.insertStmt.setInt(1, segmentGroup.gid)
         this.insertStmt.setLong(2, segmentGroup.startTime)
         this.insertStmt.setLong(3, segmentGroup.endTime)
@@ -171,52 +164,61 @@ class JDBCStorage(connectionStringAndTypes: String) extends Storage with H2Stora
         close()
         throw new java.lang.RuntimeException(se)
     }
+    this.storageSegmentGroupLock.writeLock().unlock()
   }
 
   override def getSegmentGroups(filter: TableFilter): Iterator[SegmentGroup] = {
-    getSegmentGroups(H2.expressionToSQLPredicates(filter.getSelect.getCondition,
-      this.timeSeriesGroupCache, this.memberTimeSeriesCache, supportsOr = true))
+    this.storageSegmentGroupLock.readLock().lock()
+    val rs = this.getSegmentGroups(H2.expressionToSQLLikePredicates(filter.getSelect.getCondition,
+      this.timeSeriesGroupCache, this.memberTimeSeriesCache, sql = true))
+    this.storageSegmentGroupLock.readLock().unlock()
+    rs
   }
 
   //SparkStorage
   override def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession = {
-    open(dimensions)
+    this.open(dimensions)
     ssb.getOrCreate()
   }
 
-  override def storeSegmentGroups(sparkSession: SparkSession, rdd: RDD[Row]): Unit = {
-    val groups = rdd.collect().map(row => new SegmentGroup(row.getInt(0), row.getTimestamp(1).getTime,
+  override def storeSegmentGroups(sparkSession: SparkSession, df: DataFrame): Unit = {
+    this.storageSegmentGroupLock.writeLock().lock()
+    val segmentGroups = df.collect().map(row => new SegmentGroup(row.getInt(0), row.getTimestamp(1).getTime,
       row.getTimestamp(2).getTime, row.getInt(3), row.getAs[Array[Byte]](4), row.getAs[Array[Byte]](5)))
-    storeSegmentGroups(groups, groups.length)
+    this.storeSegmentGroups(segmentGroups)
+    this.storageSegmentGroupLock.writeLock().unlock()
   }
 
-  override def getSegmentGroups(sparkSession: SparkSession, filters: Array[Filter]): RDD[Row] = {
+  override def getSegmentGroups(sparkSession: SparkSession, filters: Array[Filter]): DataFrame = {
+    this.storageSegmentGroupLock.readLock().lock()
     Static.warn("ModelarDB: projection and predicate push-down is not yet implemented")
     val rows = getSegmentGroups("").map(sg => {
       Row(sg.gid, new Timestamp(sg.startTime), new Timestamp(sg.endTime), sg.mtid, sg.model, sg.offsets)
     })
-    sparkSession.sparkContext.parallelize(rows.toSeq)
+    val df = sparkSession.createDataFrame(sparkSession.sparkContext.parallelize(rows.toSeq), Spark.getStorageSegmentGroupsSchema)
+    this.storageSegmentGroupLock.readLock().unlock()
+    df
   }
 
   /** Private Methods **/
-   private def splitConnectionStringAndTypes(connectionStringWithArguments: String): (String, String, String) = {
-     val split = connectionStringWithArguments.split(" ")
-     if (split.length == 3) {
-       (split(0), split(1), split(2))
-     } else {
-       val rdbms = connectionStringWithArguments.split(":")(1)
-       val defaults = Map(
-         "sqlite" -> Tuple3(connectionStringWithArguments, "TEXT", "BYTEA"),
-         "postgresql" -> Tuple3(connectionStringWithArguments, "TEXT", "BYTEA"),
-         "derby" -> Tuple3(connectionStringWithArguments, "LONG VARCHAR", "LONG VARCHAR FOR BIT DATA"),
-         "h2" -> Tuple3(connectionStringWithArguments, "VARCHAR", "BINARY"),
-         "hsqldb" -> Tuple3(connectionStringWithArguments, "LONGVARCHAR", "LONGVARBINARY"))
-       if ( ! defaults.contains(rdbms)) {
-         throw new IllegalArgumentException("ModelarDB: the string and binary type must also be specified for " + rdbms)
-       }
-       defaults(rdbms)
-     }
-   }
+  private def splitConnectionStringAndTypes(connectionStringWithArguments: String): (String, String, String) = {
+    val split = connectionStringWithArguments.split(" ")
+    if (split.length == 3) {
+      (split(0), split(1), split(2))
+    } else {
+      val rdbms = connectionStringWithArguments.split(":")(1)
+      val defaults = Map(
+        "sqlite" -> Tuple3(connectionStringWithArguments, "TEXT", "BYTEA"),
+        "postgresql" -> Tuple3(connectionStringWithArguments, "TEXT", "BYTEA"),
+        "derby" -> Tuple3(connectionStringWithArguments, "LONG VARCHAR", "LONG VARCHAR FOR BIT DATA"),
+        "h2" -> Tuple3(connectionStringWithArguments, "VARCHAR", "BINARY"),
+        "hsqldb" -> Tuple3(connectionStringWithArguments, "LONGVARCHAR", "LONGVARBINARY"))
+      if ( ! defaults.contains(rdbms)) {
+        throw new IllegalArgumentException("ModelarDB: the string and binary type must also be specified for " + rdbms)
+      }
+      defaults(rdbms)
+    }
+  }
 
   private def getSegmentGroups(predicates: String): Iterator[SegmentGroup] = {
     val stmt = this.connection.createStatement()

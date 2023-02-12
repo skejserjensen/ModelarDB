@@ -41,7 +41,7 @@ public abstract class ModelType implements Serializable {
     public boolean withinErrorBound(float errorBound, Iterator<DataPoint> tsA, Iterator<DataPoint> tsB) {
         boolean allWithinErrorBound = true;
         while (allWithinErrorBound && tsA.hasNext() && tsB.hasNext()){
-            allWithinErrorBound = Static.percentageError(tsA.next().value, tsB.next().value) < errorBound;
+            allWithinErrorBound = Static.percentageError(tsA.next().value, tsB.next().value) <= errorBound;
         }
         return allWithinErrorBound;
     }

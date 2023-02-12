@@ -51,6 +51,12 @@ public class TimeSeriesParquet extends TimeSeries {
             MessageType schema = this.fileReader.getFooter().getFileMetaData().getSchema();
             this.schema = new MessageType("schema",
                     schema.getFields().get(this.timestampColumnIndex), schema.getFields().get(this.valueColumnIndex));
+
+            //next() assumes timestamps are stored as int64 with the TIMESTAMP_MICROS logical type annotation
+            String[] typeComponents = schema.getColumns().get(this.timestampColumnIndex).getPrimitiveType().toString().split(" ");
+            if ( ! typeComponents[1].equals("int64") || ! typeComponents[3].equals("(TIMESTAMP_MICROS)")) {
+              throw new UnsupportedOperationException("CORE: Parquet files must store timestamps as int64 (TIMESTAMP_MICROS)");
+            }
         } catch (IOException ioe) {
             close();
             throw new RuntimeException(ioe);
@@ -59,7 +65,7 @@ public class TimeSeriesParquet extends TimeSeries {
 
     public DataPoint next() {
         Group rowGroup = this.recordReader.read();
-        long timestamp = rowGroup.getLong(0, 0);
+        long timestamp = rowGroup.getLong(0, 0) / 1000;
         float value = rowGroup.getFloat(1, 0);
         this.rowIndex++;
         return new DataPoint(this.tid, timestamp, this.scalingFactor * value);

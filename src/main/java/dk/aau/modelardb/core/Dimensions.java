@@ -56,7 +56,8 @@ public class Dimensions {
                 if (column.length != 2) {
                     throw new IllegalArgumentException("CORE: unparsable dimension \"" + dimension + "\"");
                 }
-                columns.add(column[0].trim());
+                //Columns are converted to lowercase to match the columns requested by Apache Spark and H2
+                columns.add(column[0].trim().toLowerCase());
                 types.add(parseTypes(column[1].trim()));
             }
         }

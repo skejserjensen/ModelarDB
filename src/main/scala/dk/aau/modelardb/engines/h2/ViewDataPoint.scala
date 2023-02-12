@@ -181,12 +181,6 @@ class ViewDataPointIndex(table: Table) extends Index {
 
 class ViewDataPointCursor(filter: TableFilter) extends Cursor {
 
-  /** Instance Variables **/
-  private val dataPoints: Iterator[DataPoint] = H2.h2.getSegmentGroups(filter)
-    .flatMap(_.toSegments(H2.h2storage)).flatMap(segment => segment.grid().iterator().asScala)
-  private val values = H2Projector.dataPointProjection(dataPoints, filter)
-  private val currentViewRow = new ViewRow()
-
   /** Public Methods **/
   override def get(): Row = ???
 
@@ -198,4 +192,10 @@ class ViewDataPointCursor(filter: TableFilter) extends Cursor {
   override def next(): Boolean = this.dataPoints.hasNext
 
   override def previous(): Boolean = false
+
+  /** Instance Variables **/
+  private val dataPoints: Iterator[DataPoint] = H2.h2.getSegmentGroups(filter)
+    .flatMap(_.toSegments(H2.h2storage)).flatMap(segment => segment.grid().iterator().asScala)
+  private val values = H2Projector.dataPointProjection(dataPoints, filter)
+  private val currentViewRow = new ViewRow()
 }

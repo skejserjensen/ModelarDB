@@ -124,7 +124,7 @@ public class Partitioner {
     }
 
     public static WorkingSet[] partitionTimeSeries(Configuration configuration, TimeSeriesGroup[] timeSeriesGroups,
-                                                   HashMap<String, Integer> mtidCache, int partitions) {
+                                                   Map<String, Integer> mtidCache, int partitions) {
         TimeSeriesGroup[][] pts = Partitioner.partitionTimeSeriesByRate(timeSeriesGroups, partitions);
         int[] mtids = Arrays.stream(configuration.getModelTypeNames()).mapToInt(mtidCache::get).toArray();
         WorkingSet[] workingSets = Arrays.stream(pts).map(tss -> new WorkingSet(tss, configuration.getFloat(
@@ -239,7 +239,7 @@ public class Partitioner {
         Arrays.sort(timeSeriesGroups, Comparator.comparingLong(tsg -> tsg.samplingInterval / tsg.size()));
         for (TimeSeriesGroup tsg : timeSeriesGroups) {
             Pair<Long, ArrayList<TimeSeriesGroup>> min = sets.poll();
-            min._1 = min._1 + (60000 / (tsg.samplingInterval / tsg.size())); //Data Points per Minute
+            min._1 = min._1 + Static.dataPointsPerMinute(tsg.samplingInterval, tsg.size());
             min._2.add(tsg);
             sets.add(min);
         }

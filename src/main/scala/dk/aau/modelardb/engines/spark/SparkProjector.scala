@@ -41,7 +41,7 @@ object SparkProjector {
       case 0 => //COUNT(*)
         rows
       case 123 => //COUNT_S(#)
-        rows.map((row: Row) => Row(row.getInt(3), row.getTimestamp(1), row.getTimestamp(2)))
+        rows.map((row: Row) => Row(row.getInt(0), row.getTimestamp(1), row.getTimestamp(2)))
       case 123456 => //Data Point View and UDAFs
         rows.map((row: Row) => Row(row.getInt(0), row.getTimestamp(1), row.getTimestamp(2),
           row.getInt(3), row.getAs[Array[Byte]](4), row.getAs[Array[Byte]](5)))

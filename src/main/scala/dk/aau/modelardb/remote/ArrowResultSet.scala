@@ -1,4 +1,4 @@
-/* Copyright 2018 The ModelarDB Contributors
+/* Copyright 2022 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,15 +12,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dk.aau.modelardb.engines.spark
+package dk.aau.modelardb.remote
 
-import dk.aau.modelardb.core.Dimensions
-import dk.aau.modelardb.storage.Storage
-import org.apache.spark.sql.sources.Filter
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.arrow.vector.VectorSchemaRoot
 
-trait SparkStorage extends Storage {
-  def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession
-  def storeSegmentGroups(sparkSession: SparkSession, df: DataFrame): Unit
-  def getSegmentGroups(sparkSession: SparkSession, filters: Array[Filter]): DataFrame
+trait ArrowResultSet {
+  def get(): VectorSchemaRoot
+  def hasNext(): Boolean
+  def fillNext(): Unit
+  def close(): Unit
+
+  //Purposely high as each rows only consists of tid, timestamp, value, and members
+  protected val DEFAULT_TARGET_BATCH_SIZE: Int = 1048576
 }

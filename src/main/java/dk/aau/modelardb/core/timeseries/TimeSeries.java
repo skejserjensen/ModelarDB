@@ -31,8 +31,11 @@ public abstract class TimeSeries implements  Serializable, Iterator<DataPoint> {
     abstract public void close();
 
     /** Instance Variables **/
+    //Updated by local instances after tids have been received by a remote instance
+    public int tid;
+
     public final String source;
-    public final int tid;
     public final int samplingInterval;
     public float scalingFactor;
+
 }

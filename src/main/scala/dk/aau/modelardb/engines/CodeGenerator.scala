@@ -16,10 +16,17 @@ package dk.aau.modelardb.engines
 
 import dk.aau.modelardb.core.utility.ValueFunction
 import dk.aau.modelardb.core.{DataPoint, SegmentGroup}
+
+import org.apache.arrow.vector.VectorSchemaRoot
+
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.types.{BinaryType, DataType, DoubleType, FloatType, IntegerType, LongType, StringType, StructType, TimestampType}
+import java.util
+
 import org.h2.table.Column
 import org.h2.value.{TypeInfo, Value}
+import java.sql.{ResultSet, Types}
 
 //Abstract classes that the CodeGenerator can generated instances for at run-time using the ToolBox APIs
 abstract class SparkSegmentProjector {
@@ -36,6 +43,14 @@ abstract class H2SegmentProjector {
 
 abstract class H2DataPointProjector {
   def project(dp: DataPoint, currentRow: Array[Value], tsmc: Array[Array[Object]], sc: Array[Float], tc: Array[ValueFunction]): Array[Value]
+}
+
+abstract class SparkDataFrameToArrow {
+  def fillVectors(rows: util.Iterator[Row], vsr: VectorSchemaRoot): Unit
+}
+
+abstract class H2JDBCToArrow {
+  def fillVectors(rs: ResultSet, vsr: VectorSchemaRoot): Unit
 }
 
 //CodeGenerator
@@ -65,6 +80,7 @@ object CodeGenerator {
   }
 
   def compileSparkSegmentProjection(code: String): SparkSegmentProjector = {
+    //For Apache Spark code-generation is done once on the master while compilation is done on each worker
     compileCode(code).asInstanceOf[SparkSegmentProjector]
   }
 
@@ -92,7 +108,30 @@ object CodeGenerator {
   }
 
   def compileSparkDataPointProjection(code: String): SparkDataPointProjector = {
+    //For Apache Spark code-generation is done once on the master while compilation is done on each worker
     compileCode(code).asInstanceOf[SparkDataPointProjector]
+  }
+
+  def getSparkDataFrameToArrow(schema: StructType, batchSize: Int): SparkDataFrameToArrow = {
+    val vectors = schema.zipWithIndex.map({ case (sf, columnIndex) => getDataFrameColumn(sf.dataType, columnIndex) })
+    val code = s"""import dk.aau.modelardb.engines.SparkDataFrameToArrow
+                   import java.util
+                   import java.nio.charset.StandardCharsets
+                   import org.apache.spark.sql.Row
+                   import org.apache.arrow.vector._
+                   new SparkDataFrameToArrow {
+                     override def fillVectors(rows: util.Iterator[Row], vsr: VectorSchemaRoot): Unit = {
+                       vsr.setRowCount($batchSize)
+                       var currentIndex = 0
+                       while (currentIndex < $batchSize && rows.hasNext) {
+                         val row = rows.next
+                         ${vectors.mkString}
+                         currentIndex += 1
+                       }
+                       vsr.setRowCount(currentIndex)
+                     }
+                   }""".stripMargin
+    compileCode(code).asInstanceOf[SparkDataFrameToArrow]
   }
 
   //H2
@@ -105,7 +144,7 @@ object CodeGenerator {
         case "END_TIME" => "segment.endTime"
         case "MTID" => "segment.mtid"
         case "MODEL" => "segment.model"
-        case "GAPS" => "segment.offsets"
+        case "OFFSETS" => "segment.offsets"
         case _ => "tsmc(segment.gid)(%d)".format(column.getColumnId - 6)
       }
       "currentValues(%d)".format(column.getColumnId) + " = " + constructor.format(variableName)
@@ -154,6 +193,34 @@ object CodeGenerator {
     compileCode(code).asInstanceOf[H2DataPointProjector]
   }
 
+  def getH2JDBCToArrow(rs: ResultSet, batchSize: Int): H2JDBCToArrow = {
+    val vectors = StringBuilder.newBuilder
+    val metadata = rs.getMetaData
+    for (jdbcIndex <- Range.inclusive(1, metadata.getColumnCount)) {
+      val columnType = metadata.getColumnType(jdbcIndex)
+      vectors.append(getJDBCColumn(columnType, jdbcIndex))
+    }
+
+    val code = s"""import dk.aau.modelardb.engines.H2JDBCToArrow
+                   import java.sql.ResultSet
+                   import java.nio.charset.StandardCharsets
+                   import org.apache.arrow.vector._
+                   new H2JDBCToArrow {
+                     def fillVectors(rs: ResultSet, vsr: VectorSchemaRoot): Unit = {
+                       vsr.setRowCount($batchSize)
+                       var currentIndex = 0
+                       //H2ResultSet.hasNext() has already called rs.next() once
+                       do {
+                         ${vectors.mkString}
+                         currentIndex += 1
+                       } while (currentIndex < $batchSize && rs.next())
+                       vsr.setRowCount(currentIndex)
+                     }
+                   }""".stripMargin
+    compileCode(code).asInstanceOf[H2JDBCToArrow]
+  }
+
+  //Shared
   def getValueFunction(transformation: String): ValueFunction = {
     val code = s"""
     import dk.aau.modelardb.core.utility.ValueFunction
@@ -167,6 +234,32 @@ object CodeGenerator {
   }
 
   /** Private Methods **/
+  private def getDataFrameColumn(columnType: DataType, index: Int): String = {
+    columnType match {
+      case IntegerType => f"vsr.getVector($index).asInstanceOf[IntVector].set(currentIndex, row.getInt($index))\n"
+      case LongType => f"vsr.getVector($index).asInstanceOf[BigIntVector].set(currentIndex, row.getLong($index))\n"
+      case TimestampType => f"vsr.getVector($index).asInstanceOf[TimeStampMilliVector].set(currentIndex, row.getTimestamp($index).getTime)\n"
+      case FloatType => f"vsr.getVector($index).asInstanceOf[Float4Vector].set(currentIndex, row.getFloat($index))\n"
+      case DoubleType => f"vsr.getVector($index).asInstanceOf[Float8Vector].set(currentIndex, row.getDouble($index))\n"
+      case StringType => f"vsr.getVector($index).asInstanceOf[VarCharVector].setSafe(currentIndex, row.getString($index).getBytes(StandardCharsets.UTF_8))\n"
+      case BinaryType => f"vsr.getVector($index).asInstanceOf[VarBinaryVector].setSafe(currentIndex, row.getAs[Array[Byte]]($index))\n"
+    }
+  }
+
+  private def getJDBCColumn(columnType: Int, jdbcIndex: Int): String = {
+    val vectorIndex = jdbcIndex - 1
+    columnType match {
+      case Types.INTEGER => f"vsr.getVector($vectorIndex).asInstanceOf[IntVector].set(currentIndex, rs.getInt($jdbcIndex))\n"
+      case Types.BIGINT => f"vsr.getVector($vectorIndex).asInstanceOf[BigIntVector].set(currentIndex, rs.getLong($jdbcIndex))\n"
+      case Types.TIMESTAMP => f"vsr.getVector($vectorIndex).asInstanceOf[TimeStampMilliVector].set(currentIndex, rs.getTimestamp($jdbcIndex).getTime)\n"
+      case Types.REAL => f"vsr.getVector($vectorIndex).asInstanceOf[Float4Vector].set(currentIndex, rs.getFloat($jdbcIndex))\n"
+      case Types.FLOAT => f"vsr.getVector($vectorIndex).asInstanceOf[Float4Vector].set(currentIndex, rs.getFloat($jdbcIndex))\n"
+      case Types.DOUBLE => f"vsr.getVector($vectorIndex).asInstanceOf[Float8Vector].set(currentIndex, rs.getDouble($jdbcIndex))\n"
+      case Types.VARCHAR => f"vsr.getVector($vectorIndex).asInstanceOf[VarCharVector].setSafe(currentIndex, rs.getString($jdbcIndex).getBytes(StandardCharsets.UTF_8))\n"
+      case Types.VARBINARY => f"vsr.getVector($vectorIndex).asInstanceOf[VarBinaryVector].setSafe(currentIndex, rs.getBytes($jdbcIndex))\n"
+    }
+  }
+
   private def compileCode(code: String): Any = {
     //Imports the packages required to construct the toolbox
     import scala.reflect.runtime.currentMirror

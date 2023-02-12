@@ -20,9 +20,6 @@ import org.h2.value.Value
 
 class ViewRow extends Row {
 
-  /** Instance Variable **/
-  private var values: Array[Value] = _
-
   /** Public Methods **/
   override def getByteCount(dummy: Data): Int = ???
 
@@ -51,4 +48,7 @@ class ViewRow extends Row {
   override def getKey: Long = ???
 
   override def getMemory: Int = ???
+
+  /** Instance Variable **/
+  private var values: Array[Value] = _
 }

@@ -178,12 +178,6 @@ class ViewSegmentIndex(table: Table) extends Index {
 
 class ViewSegmentCursor(filter: TableFilter) extends Cursor {
 
-  /** Instance Variables **/
-  private val segments: Iterator[SegmentGroup] = H2.h2.getSegmentGroups(filter)
-    .flatMap(_.explode(H2.h2storage.groupMetadataCache, H2.h2storage.groupDerivedCache))
-  private val values = H2Projector.segmentProjection(segments, filter)
-  private val currentViewRow = new ViewRow()
-
   /** Public Methods **/
   override def get(): Row = ???
 
@@ -195,4 +189,11 @@ class ViewSegmentCursor(filter: TableFilter) extends Cursor {
   override def next(): Boolean = this.segments.hasNext
 
   override def previous(): Boolean = false
+
+  /** Instance Variables **/
+  private val gdcj = H2.h2storage.groupDerivedCache
+  private val segments: Iterator[SegmentGroup] = H2.h2.getSegmentGroups(filter)
+    .flatMap(_.explode(H2.h2storage.groupMetadataCache, gdcj))
+  private val values = H2Projector.segmentProjection(segments, filter)
+  private val currentViewRow = new ViewRow()
 }

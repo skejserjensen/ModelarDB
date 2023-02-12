@@ -118,33 +118,8 @@ public class Static {
         return result * 100.0;
     }
 
-    public static long gapsToBits(byte[] gaps, int[] timeSeries) {
-        if (gaps.length == 0) {
-            return 0;
-        }
-
-        BitSet bs = new BitSet();
-        int[] values = bytesToInts(gaps);
-        for (int g : values) {
-            //The metadata cache contains the sampling interval as the first element
-            int tid = Arrays.binarySearch(timeSeries, 1, timeSeries.length, g);
-            bs.set(tid - 1); //Tids start at one, but there is no reason to waste a bit
-        }
-        return bs.toLongArray()[0];
-    }
-
-    public static byte[] bitsToGaps(long value, int[] timeSeries) {
-        int index = 0;
-        ArrayList<Integer> gaps = new ArrayList<>();
-        while (value != 0L) {
-            if (value % 2L != 0) {
-                //Tids start at one, but gaps are stored as tid - 1 to not waste a bit
-                gaps.add(timeSeries[index + 1]);
-            }
-            ++index;
-            value = value >>> 1;
-        }
-        return intToBytes(gaps.stream().mapToInt(i -> i).toArray());
+    public static int dataPointsPerMinute(int samplingInterval, int timeSeriesGroupSize) {
+        return 60000 / samplingInterval / timeSeriesGroupSize;
     }
 
     public static boolean isInteger(String s) {

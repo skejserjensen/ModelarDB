@@ -1,9 +1,9 @@
 # ModelarDB
-ModelarDB is a modular model-based time series management system that
-interfaces a query engine and a storage system with ModelarDB Core. This Core
-is a self-contained, adaptive, and highly extensible Java library for automatic
-online compression of time series. ModelarDB is designed for Unix-like
-operating systems and tested on Linux and macOS.
+ModelarDB is a modular model-based time series management system that interfaces
+a query engine and a data store with ModelarDB Core. This Core is a
+self-contained, adaptive, and highly extensible Java library for automatic
+online compression and efficient aggregation of time series. ModelarDB is
+designed for Unix-like operating systems and is tested on Linux.
 
 This repository primarily contains the static source code for the legacy
 JVM-based versions of ModelarDB documented in the [papers listed
@@ -15,31 +15,40 @@ under active development, while [the legacy JVM-based version of
 ModelarDB](https://github.com/ModelarData/ModelarDB) is not.
 
 ## Installation
-1. Install the Scala Build Tool (sbt).
-2. Clone the ModelarDB Git repository https://github.com/skejserjensen/ModelarDB
-3. Start ``sbt`` in the root of the repository and run one of the following commands:
+1. Install a Java Development Kit.\*
+2. Install the Scala Build Tool (sbt).
+3. Clone the ModelarDB Git [repository](https://github.com/skejserjensen/ModelarDB).
+4. Start ``sbt`` in the root of the repository and run one of the following commands:
 
-- ``compile`` compiles ModelarDB to Java class files.
-- ``package`` compiles ModelarDB to a Jar file.
-- ``assembly`` compiles ModelarDB to an uber Jar file.*
-- ``run`` executes ModelarDB's main method.**
+- `compile` compiles ModelarDB to Java class files.
+- `package` compiles ModelarDB to a Jar file.
+- `assembly` compiles ModelarDB to an uber Jar file.\*\*
+- `run` executes ModelarDB's main method.\*\*\*
 
-\* To execute ModelarDB on an existing Apache Spark cluster, an uber jar must be
-created to ensure the necessary dependencies are all included in a single jar.
+\* OpenJDK 11 and Oracle's Java SE Development Kit 11 have been tested.
 
-\*\* If ``sbt run`` is executed directly from the command-line, then the run
+\*\* To execute ModelarDB on an existing Apache Spark cluster, an uber Jar must
+be created to ensure the necessary dependencies are included in a single Jar
+file.
+
+\*\*\* If ``sbt run`` is executed directly from the command-line, then the run
 command and the arguments must be surrounded by quotes to pass the arguments to
-ModelarDB: ``sbt 'run arguments'``
+ModelarDB: ``sbt 'run arguments'``.
 
 ## Configuration
 ModelarDB requires that a configuration file is available at
-*$HOME/Programs/modelardb.conf* or as the first command-line argument. This file
-must specify the query processing engine and storage system to use. An example
+`$HOME/.modelardb.conf` or is passed as the first command-line argument. This
+file must specify the query processing engine and data store to use. An example
 configuration is included as part of this repository.
 
 ## Papers
 The research leading to ModelarDB is documented in several papers. If you use
 ModelarDB in academia, please cite the relevant paper(s) below.
+
+***ModelarDB: Integrated Model-Based Management of Time Series from Edge to Cloud***\
+by Søren Kejser Jensen, Christian Thomsen, and Torben Bach Pedersen\
+in *Transactions on Large-Scale Data- and Knowledge-Centered Systems LIII, 1-33, 2023*\
+Links: [Springer](https://link.springer.com/chapter/10.1007/978-3-662-66863-4_1)
 
 ***Scalable Model-Based Management of Correlated Dimensional Time Series in ModelarDB+***\
 by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\

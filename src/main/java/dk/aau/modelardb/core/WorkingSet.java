@@ -36,7 +36,7 @@ public class WorkingSet implements Serializable {
     public WorkingSet(TimeSeriesGroup[] timeSeriesGroups, float dynamicSplitFraction, String[] models,
                       int[] mtids, float errorBound, int lengthBound, int latency) {
         this.timeSeriesGroups = timeSeriesGroups;
-        this.dynamicSplitFraction = (dynamicSplitFraction > 0.0F) ? 1.0F / dynamicSplitFraction : 0.0F;
+        this.dynamicSplitFraction = dynamicSplitFraction;
         this.currentTimeSeriesGroup = 0;
         this.modelTypeNames = models;
         this.mtids = mtids;

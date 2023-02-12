@@ -18,13 +18,17 @@ import dk.aau.modelardb.core._
 import dk.aau.modelardb.core.models.ModelTypeFactory
 import dk.aau.modelardb.core.utility.{Pair, Static, ValueFunction}
 import dk.aau.modelardb.engines.{CodeGenerator, EngineFactory}
+import dk.aau.modelardb.remote.RemoteUtilities
 import dk.aau.modelardb.storage.StorageFactory
+
+import org.apache.arrow.memory.RootAllocator
 
 import java.io.File
 import java.nio.file.{FileSystems, Paths}
 import java.util
 import java.util.TimeZone
 import java.util.concurrent.Executors
+
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
@@ -33,9 +37,11 @@ object Main {
 
   /** Public Methods **/
   def main(args: Array[String]): Unit = {
+    //DEBUG: prints all log messages to System.out
+    //org.apache.log4j.BasicConfigurator.configure()
 
-    //ModelarDB checks args(0) for a config and uses $HOME/Programs/modelardb.conf as a fallback
-    val fallback = System.getProperty("user.home") + "/Programs/modelardb.conf"
+    //ModelarDB checks args(0) for a config and uses $HOME/.modelardb.conf as a fallback
+    val fallback = System.getProperty("user.home") + "/.modelardb.conf"
     val configPath: String = if (args.length == 1) {
       args(0)
     } else if (new java.io.File(fallback).exists) {
@@ -52,13 +58,14 @@ object Main {
     TimeZone.setDefault(configuration.getTimeZone) //Ensures all components use the same time zone
 
     /* Storage */
-    val storage = StorageFactory.getStorage(configuration.getString("modelardb.storage"))
+    val storage = StorageFactory.getStorage(configuration)
 
     /* Engine */
     EngineFactory.startEngine(configuration, storage)
 
     /* Cleanup */
     storage.close()
+    RemoteUtilities.getRootAllocator(configuration).close() //Explicitly closed to log memory leaks
   }
 
   /** Private Methods **/
@@ -67,6 +74,7 @@ object Main {
     val configuration = new Configuration()
     val models = ArrayBuffer[String]()
     val sources = ArrayBuffer[String]()
+    val external = ArrayBuffer[Array[String]]()
     val derivedSources = new util.HashMap[String, ArrayBuffer[Pair[String, ValueFunction]]]()
     val correlations = ArrayBuffer[Correlation]()
 
@@ -87,48 +95,58 @@ object Main {
     val configFullSource = Source.fromFile(configPath)
     for (line <- configFullSource.getLines().filter(_.nonEmpty)) {
       //Parsing is performed naively and will terminate if the config is malformed
-      val lineSplit = line.trim().split(" ", 2)
-      lineSplit(0) match {
-        case "modelardb.model_type" => models.append(lineSplit(1))
-        case "modelardb.source" => appendSources(lineSplit(1), sources)
-        case "modelardb.source.derived" =>
-          //Store a mapping from the original source to the derived source and the function to map over its values
-          val derived = lineSplit(1).split(' ').map(_.trim)
-          val transformation = CodeGenerator.getValueFunction(derived(2))
-          if ( ! derivedSources.containsKey(derived(0))) {
-            derivedSources.put(derived(0), ArrayBuffer[Pair[String, ValueFunction]]())
-          }
-          derivedSources.get(derived(0)).append(new Pair(derived(1), transformation))
-        case "modelardb.dimensions" => //Purposely empty as modelardb.dimensions have already been parsed
-        case "modelardb.correlation" =>
-          //If the value is a file each line is considered a clause
-          val tls = lineSplit(1).trim
-          if (new File(tls).exists()) {
-            val correlationSource = Source.fromFile(tls)
-            for (line <- correlationSource.getLines()) {
-              correlations.append(parseCorrelation(line, dimensions))
+      val lineBeforeComment = line.takeWhile(_ != '#')
+      val lineSplit = lineBeforeComment.trim().split(" ", 2)
+      try { //Catches all cases were the correct number of arguments were not set for lineSplit(0)
+        lineSplit(0) match {
+          case "modelardb.model_type" => models.append(lineSplit(1))
+          case "modelardb.source" => appendSources(lineSplit(1), sources)
+          case "modelardb.source.derived" =>
+            //Store a mapping from the original source to the derived source and the function to map over its values
+            val derived = lineSplit(1).split(' ').map(_.trim)
+            val transformation = CodeGenerator.getValueFunction(derived(2))
+            if ( ! derivedSources.containsKey(derived(0))) {
+              derivedSources.put(derived(0), ArrayBuffer[Pair[String, ValueFunction]]())
             }
-            correlationSource.close()
-          } else {
-            correlations.append(parseCorrelation(tls, dimensions))
-          }
-        case "modelardb.engine" | "modelardb.storage" | "modelardb.interface" | "modelardb.time_zone" |
-             "modelardb.ingestors" | "modelardb.timestamp_column" | "modelardb.value_column" |
-             "modelardb.error_bound" | "modelardb.length_bound" | "modelardb.maximum_latency" |
-             "modelardb.sampling_interval" | "modelardb.batch_size" | "modelardb.dynamic_split_fraction"  |
-             "modelardb.csv.separator" | "modelardb.csv.header" | "modelardb.csv.date_format" | "modelardb.csv.locale" |
-             "modelardb.spark.streaming" =>
-          configuration.add(lineSplit(0), lineSplit(1).stripPrefix("'").stripSuffix("'"))
-        case _ =>
-          if (lineSplit(0).charAt(0) != '#') {
-            throw new UnsupportedOperationException("ModelarDB: unknown setting \"" + lineSplit(0) + "\" in config file")
-          }
+            derivedSources.get(derived(0)).append(new Pair(derived(1), transformation))
+          case "modelardb.dimensions" => //Purposely empty as modelardb.dimensions have already been parsed
+          case "modelardb.correlation" =>
+            //If the value is a file each line is considered a clause
+            val tls = lineSplit(1).trim
+            if (new File(tls).exists()) {
+              val correlationSource = Source.fromFile(tls)
+              for (line <- correlationSource.getLines()) {
+                correlations.append(parseCorrelation(line, dimensions))
+              }
+              correlationSource.close()
+            } else {
+              correlations.append(parseCorrelation(tls, dimensions))
+            }
+          case "modelardb.spark.external" =>
+            external.append(lineSplit(1) //Splits the argument on spaces but not inside single quotes
+              .split(" (?=([^']*'[^']*')*[^']*$)").map(_.trim.stripPrefix("'").stripSuffix("'")))
+          case "modelardb.engine" | "modelardb.storage" | "modelardb.interface" | "modelardb.transfer" |
+               "modelardb.time_zone" | "modelardb.ingestors" | "modelardb.timestamp_column" | "modelardb.value_column" |
+               "modelardb.error_bound" | "modelardb.length_bound" | "modelardb.maximum_latency" |
+               "modelardb.sampling_interval" | "modelardb.batch_size" | "modelardb.dynamic_split_fraction" |
+               "modelardb.csv.separator" | "modelardb.csv.header" | "modelardb.csv.date_format" | "modelardb.csv.locale" |
+               "modelardb.spark.streaming" =>
+            configuration.add(lineSplit(0), lineSplit(1).stripPrefix("'").stripSuffix("'"))
+          case _ =>
+            if (lineSplit(0).nonEmpty) {
+              throw new IllegalArgumentException("ModelarDB: unknown setting \"" + lineSplit(0) + "\" in config file")
+            }
+        }
+      } catch {
+        case _: IndexOutOfBoundsException =>
+          throw new IllegalArgumentException("ModelarDB: missing argument for \"" + lineSplit(0) + "\" in config file")
       }
     }
     configFullSource.close()
 
     configuration.add("modelardb.model_types", models.toArray)
     configuration.add("modelardb.sources", sources.toArray)
+    configuration.add("modelardb.spark.external", external.toArray)
     val finalDerivedSources = new util.HashMap[String, Array[Pair[String, ValueFunction]]]()
     val dsIter = derivedSources.entrySet().iterator()
     while (dsIter.hasNext) {
@@ -137,6 +155,7 @@ object Main {
     }
     configuration.add("modelardb.sources.derived", finalDerivedSources)
     configuration.add("modelardb.correlations", correlations.toArray)
+    configuration.add("modelardb.root_allocator", new RootAllocator())
     configuration.add("modelardb.executor_service", Executors.newCachedThreadPool())
     validate(configuration)
   }

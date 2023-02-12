@@ -45,7 +45,6 @@ public class TimeSeriesCSV extends TimeSeries {
         this.bufferSize = 1024;
         this.hasHeader = hasHeader;
         this.splitString = splitString;
-        this.scalingFactor = 1.0F;
 
 
         this.timestampColumnIndex = timestampColumnIndex;
@@ -203,7 +202,6 @@ public class TimeSeriesCSV extends TimeSeries {
     /** Instance Variables **/
     private String stringPath;
     private final boolean hasHeader;
-    private final float scalingFactor;
     private final int bufferSize;
     private ByteBuffer byteBuffer;
     private final StringBuffer decodeBuffer;

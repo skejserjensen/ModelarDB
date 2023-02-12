@@ -41,7 +41,6 @@ public class AsyncTimeSeriesSocket extends TimeSeries implements AsyncTimeSeries
         //A small buffer is used so more time series can be ingested in parallel
         this.bufferSize = 1024;
         this.splitString = splitString;
-        this.scalingFactor = 1.0F;
 
         this.timestampColumn = timestampColumnIndex;
         switch (dateFormat) {
@@ -187,7 +186,6 @@ public class AsyncTimeSeriesSocket extends TimeSeries implements AsyncTimeSeries
     /** Instance Variables **/
     private String host;
     private final int port;
-    private final float scalingFactor;
     private final int bufferSize;
     private ByteBuffer byteBuffer;
     private final StringBuffer decodeBuffer;

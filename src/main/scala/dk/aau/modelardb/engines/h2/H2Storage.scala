@@ -14,10 +14,11 @@
  */
 package dk.aau.modelardb.engines.h2
 
-import dk.aau.modelardb.core.{SegmentGroup, Storage}
+import dk.aau.modelardb.core.SegmentGroup
+import dk.aau.modelardb.storage.Storage
 import org.h2.table.TableFilter
 
 trait H2Storage extends Storage {
-  def storeSegmentGroups(segments: Array[SegmentGroup], length: Int): Unit
+  def storeSegmentGroups(segmentGroups: Array[SegmentGroup]): Unit
   def getSegmentGroups(filter: TableFilter): Iterator[SegmentGroup]
 }

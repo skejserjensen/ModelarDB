@@ -1,4 +1,4 @@
-/* Copyright 2018 The ModelarDB Contributors
+/* Copyright 2022 The ModelarDB Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,15 +12,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dk.aau.modelardb.engines.spark
+package dk.aau.modelardb.engines
 
-import dk.aau.modelardb.core.Dimensions
-import dk.aau.modelardb.storage.Storage
-import org.apache.spark.sql.sources.Filter
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import dk.aau.modelardb.remote.ArrowResultSet
 
-trait SparkStorage extends Storage {
-  def open(ssb: SparkSession.Builder, dimensions: Dimensions): SparkSession
-  def storeSegmentGroups(sparkSession: SparkSession, df: DataFrame): Unit
-  def getSegmentGroups(sparkSession: SparkSession, filters: Array[Filter]): DataFrame
+trait QueryEngine {
+  def listTables(): Array[String]
+  def executeToJSON(query: String): Array[String]
+  def executeToArrow(query: String): ArrowResultSet
 }
