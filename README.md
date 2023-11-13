@@ -45,6 +45,11 @@ configuration is included as part of this repository.
 The research leading to ModelarDB is documented in several papers. If you use
 ModelarDB in academia, please cite the relevant paper(s) below.
 
+***Time Series Management Systems: A 2022 Survey***\
+by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
+in *Data Series Management and Analytics (Forthcoming)*\
+Links: [AAU (preprint)](https://vbn.aau.dk/da/publications/time-series-management-systems-a-2022-survey)
+
 ***ModelarDB: Integrated Model-Based Management of Time Series from Edge to Cloud***\
 by Søren Kejser Jensen, Christian Thomsen, and Torben Bach Pedersen\
 in *Transactions on Large-Scale Data- and Knowledge-Centered Systems LIII, 1-33, 2023*\
