@@ -84,6 +84,11 @@ Links: [IEEE](https://ieeexplore.ieee.org/document/8012550/), [arXiv (preprint)]
 The research leading to ModelarDB has also been presented at multiple events.
 The slides used are available below:
 
+***Why Model-Based Lossy Compression is Great for Wind Turbine Analytics***\
+by Torben Bach Pedersen\
+at *40th IEEE International Conference on Data Engineering, 2024*\
+Links: [Slides](slides/2024-05-16_ICDE.pdf), [Event](https://icde2024.github.io/)
+
 ***Model-based storage and management of massive sensor time series***\
 by Christian Thomsen\
 at *Digital Tech Summit, 2021*\
