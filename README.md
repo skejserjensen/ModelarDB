@@ -45,6 +45,11 @@ configuration is included as part of this repository.
 The research leading to ModelarDB is documented in several papers. If you use
 ModelarDB in academia, please cite the relevant paper(s) below.
 
+***Why Model-Based Lossy Compression is Great for Wind Turbine Analytics***\
+by Søren Kejser Jensen, Christian Thomsen, Torben Bach Pedersen, Carlos Enrique Muñiz-Cuza, and Abduvoris Abduvakhobov\
+in *The Proceedings of ICDE, 5667-5668, 2024*\
+Links: [IEEE](https://ieeexplore.ieee.org/document/10597779)
+
 ***Time Series Management Systems: A 2022 Survey***\
 by Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
 in *Data Series Management and Analytics (Forthcoming)*\
