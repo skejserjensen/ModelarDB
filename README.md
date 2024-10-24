@@ -89,6 +89,11 @@ Links: [IEEE](https://ieeexplore.ieee.org/document/8012550/), [arXiv (preprint)]
 The research leading to ModelarDB has also been presented at multiple events.
 The slides used are available below:
 
+***ModelarDB: Analytics of High-Frequency Time Series Across Edge, Cloud, and Client***\
+by Christian Thomsen and Søren Kejser Jensen\
+at *Danish Digitalization, Data Science and AI, 2024*\
+Links: [Event](https://d3aconference.dk/), [Slides](slides/2024-10-23_D3A.pdf)
+
 ***Model-based storage and management of massive sensor time series***\
 by Christian Thomsen\
 at *Digital Tech Summit, 2021*\
