@@ -45,6 +45,11 @@ configuration is included as part of this repository.
 The research leading to ModelarDB is documented in several papers. If you use
 ModelarDB in academia, please cite the relevant paper(s) below.
 
+***Scalable Model-Based Management of Massive High Frequency Wind Turbine Data with ModelarDB***\
+by Abduvoris Abduvakhobov, Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen \
+in *The Proceedings of the VLDB Endowment, 17(13): 4723-4732, 2024*\
+Links: [PVLDB](https://www.vldb.org/pvldb/vol17/p4723-abduvakhobov.pdf), [GitHub](https://github.com/aabduvakhobov/ModelarDB-Analyzer)
+
 ***Why Model-Based Lossy Compression is Great for Wind Turbine Analytics***\
 by Søren Kejser Jensen, Christian Thomsen, Torben Bach Pedersen, Carlos Enrique Muñiz-Cuza, and Abduvoris Abduvakhobov\
 in *The Proceedings of ICDE, 5667-5668, 2024*\
