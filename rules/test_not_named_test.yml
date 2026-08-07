@@ -1,0 +1,14 @@
+id: test_not_named_test
+message: Test function not named test_.
+severity: error
+language: Rust
+# Test functions (annotated with #[test] or #[tokio::test]) must be named test_ etc.
+rule:
+  kind: function_item
+  not:
+    regex: 'fn test_.*'
+  follows:
+    kind: attribute_item
+    any:
+      - pattern: '#[test]'
+      - pattern: '#[tokio::test]'

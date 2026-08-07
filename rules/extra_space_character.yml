@@ -1,0 +1,10 @@
+id: extra_space_character
+message: Comment or string contains an extra space.
+severity: error
+language: Rust
+# The rule only checks for double space to not report errors when whitespace is used for formatting.
+rule:
+  any:
+    - kind: line_comment
+    - kind: string_literal
+  regex: "[^ ]  [^ ]"

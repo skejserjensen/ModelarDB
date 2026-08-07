@@ -1,0 +1,145 @@
+/* Copyright 2025 The ModelarDB Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package modelardb.flight.protocol;
+
+// Metadata for the ModelarDB cluster manager, including its unique key and storage configuration.
+message ManagerMetadata {
+  // Key used to uniquely identify the cluster manager.
+  string key = 1;
+
+  // Storage configuration used to connect to an S3 object store.
+  message S3Configuration {
+    string endpoint = 1;
+    string bucket_name = 2;
+    string access_key_id = 3;
+    string secret_access_key = 4;
+  }
+
+  // Storage configuration used to connect to an Azure Blob Storage object store.
+  message AzureConfiguration {
+    string account_name = 1;
+    string access_key = 2;
+    string container_name = 3;
+  }
+
+  // Storage configuration used by the cluster manager.
+  oneof storage_configuration {
+    S3Configuration s3_configuration = 2;
+    AzureConfiguration azure_configuration = 3;
+  }
+}
+
+// Metadata for a node in the ModelarDB cluster, including its URL and server mode.
+message NodeMetadata {
+  enum ServerMode {
+    CLOUD = 0;
+    EDGE = 1;
+  }
+
+  // gRPC URL of the node.
+  string url = 1;
+
+  // Mode indicating whether the node is a cloud or edge server.
+  ServerMode server_mode = 2;
+}
+
+// Metadata for multiple normal tables and time series tables.
+message TableMetadata {
+  // Metadata for a normal table, including its name and schema.
+  message NormalTableMetadata {
+    string name = 1;
+    bytes schema = 2;
+  }
+
+  // Metadata for a time series table, including its name, schema, error bounds, and generated column expressions.
+  message TimeSeriesTableMetadata {
+    message ErrorBound {
+      enum Type {
+        ABSOLUTE = 0;
+        RELATIVE = 1;
+      }
+      Type type = 1;
+      float value = 2;
+    }
+
+    string name = 1;
+    bytes schema = 2;
+    repeated ErrorBound error_bounds = 3;
+    repeated bytes generated_column_expressions = 4;
+  }
+
+  // Normal tables included in the table metadata.
+  repeated NormalTableMetadata normal_tables = 1;
+
+  // Time series tables included in the table metadata.
+  repeated TimeSeriesTableMetadata time_series_tables = 2;
+}
+
+// Configuration of a ModelarDB node.
+message Configuration {
+  // Amount of memory to reserve for storing multivariate time series.
+  uint64 multivariate_reserved_memory_in_bytes = 1;
+
+  // Amount of memory to reserve for storing uncompressed data buffers.
+  uint64 uncompressed_reserved_memory_in_bytes = 2;
+
+  // Amount of memory to reserve for storing compressed data buffers.
+  uint64 compressed_reserved_memory_in_bytes = 3;
+
+  // The number of bytes that are required before transferring a batch of data to the remote object store.
+  optional uint64 transfer_batch_size_in_bytes = 4;
+
+  // The number of seconds between each transfer of data to the remote object store.
+  optional uint64 transfer_time_in_seconds = 5;
+
+  // The number of seconds to retain deleted data in storage before it can be removed by vacuum.
+  uint64 retention_period_in_seconds = 6;
+
+  // Number of threads to allocate for converting multivariate time series to univariate time series.
+  uint32 ingestion_threads = 7;
+
+  // Number of threads to allocate for compressing univariate time series to segments.
+  uint32 compression_threads = 8;
+
+  // Number of threads to allocate for writing segments to a local and/or remote data folder.
+  uint32 writer_threads = 9;
+}
+
+// Request to update the configuration of a ModelarDB node.
+message UpdateConfiguration {
+  enum Setting {
+    MULTIVARIATE_RESERVED_MEMORY_IN_BYTES = 0;
+    UNCOMPRESSED_RESERVED_MEMORY_IN_BYTES = 1;
+    COMPRESSED_RESERVED_MEMORY_IN_BYTES = 2;
+    TRANSFER_BATCH_SIZE_IN_BYTES = 3;
+    TRANSFER_TIME_IN_SECONDS = 4;
+    RETENTION_PERIOD_IN_SECONDS = 5;
+  }
+
+  // Setting to update in the configuration.
+  Setting setting = 1;
+
+  // New value for the setting.
+  optional uint64 new_value = 2;
+}
+
+// Metadata for a ModelarDB database instance.
+message DatabaseMetadata {
+  // Names of the tables in the database.
+  repeated string table_names = 1;
+}

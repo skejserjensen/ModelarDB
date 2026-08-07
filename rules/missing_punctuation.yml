@@ -1,0 +1,14 @@
+id: missing_punctuation
+message: Comment is missing punctuation.
+severity: error
+language: Rust
+# The last line of a comment must end with punctuation unless it is a link.
+rule:
+  kind: line_comment
+  all:
+    - regex: '.+[^\\.]$'
+    - not:
+        regex: '.*https?://.*'
+  precedes:
+    not:
+      kind: line_comment

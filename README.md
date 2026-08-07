@@ -1,54 +1,26 @@
 # ModelarDB
-ModelarDB is a modular model-based time series management system that interfaces
-a query engine and a data store with ModelarDB Core. This Core is a
-self-contained, adaptive, and highly extensible Java library for automatic
-online compression and efficient aggregation of time series. ModelarDB is
-designed for Unix-like operating systems and is tested on Linux.
+:warning: **This repository contains the static code used in papers; see [ModelarDB](https://github.com/ModelarData/ModelarDB-RS) for the open-source project.**
 
-This repository primarily contains the static source code for the legacy
-JVM-based versions of ModelarDB documented in the [papers listed
-below](https://github.com/skejserjensen/ModelarDB#papers). A re-design and
-re-implementation in Rust is currently being developed as an open-source project
-at [ModelarDB](https://github.com/ModelarData/ModelarDB-RS). Thus, [this
-Rust-based version of ModelarDB](https://github.com/ModelarData/ModelarDB-RS) is
-under active development, while [the legacy JVM-based version of
-ModelarDB](https://github.com/ModelarData/ModelarDB) is not.
+ModelarDB is an efficient high-performance time series management system that is designed to efficiently ingest, transfer, store, and analyze high-frequency time series across the edge, cloud, and client.
+It provides state-of-the-art lossless compression, lossy compression, and query performance by efficiently compressing time series on the edge using multiple different types of models such as constant and linear functions.
+As a result, the high-frequency time series can be transferred to the cloud through a connection with very limited bandwidth and stored in the cloud at a low cost.
+The compressed time series can be efficiently queried on both the edge, cloud, and client using a relational interface and SQL without any knowledge about the model-based representation.
+A query optimizer automatically rewrites the queries to exploit the model-based representation.
+In addition, programming language bindings are provided so programs can efficiently execute queries against ModelarDB instances and read and write data on local disk or in a remote object store.
 
-## Installation
-1. Install a Java Development Kit.\*
-2. Install the Scala Build Tool (sbt).
-3. Clone the ModelarDB Git [repository](https://github.com/skejserjensen/ModelarDB).
-4. Start ``sbt`` in the root of the repository and run one of the following commands:
-
-- `compile` compiles ModelarDB to Java class files.
-- `package` compiles ModelarDB to a Jar file.
-- `assembly` compiles ModelarDB to an uber Jar file.\*\*
-- `run` executes ModelarDB's main method.\*\*\*
-
-\* OpenJDK 11 and Oracle's Java SE Development Kit 11 have been tested.
-
-\*\* To execute ModelarDB on an existing Apache Spark cluster, an uber Jar must
-be created to ensure the necessary dependencies are included in a single Jar
-file.
-
-\*\*\* If ``sbt run`` is executed directly from the command-line, then the run
-command and the arguments must be surrounded by quotes to pass the arguments to
-ModelarDB: ``sbt 'run arguments'``.
-
-## Configuration
-ModelarDB requires that a configuration file is available at
-`$HOME/.modelardb.conf` or is passed as the first command-line argument. This
-file must specify the query processing engine and data store to use. An example
-configuration is included as part of this repository.
+This repository contains the static source code and documentation for the versions of ModelarDB documented in the [papers listed below](https://github.com/skejserjensen/ModelarDB#papers).
+Two versions of ModelarDB have been developed.
+A version in Rust is currently being developed as an open-source project at [ModelarDB](https://github.com/ModelarData/ModelarDB-RS), and a legacy [JVM-based version of ModelarDB](https://github.com/ModelarData/ModelarDB).
+Thus, the [Rust-based version of ModelarDB](https://github.com/ModelarData/ModelarDB-RS) is under active development, while the legacy [JVM-based version of ModelarDB](https://github.com/ModelarData/ModelarDB) is not.
 
 ## Papers
-The research leading to ModelarDB is documented in several papers. If you use
-ModelarDB in academia, please cite the relevant paper(s) below.
+The research leading to ModelarDB is documented in several papers.
+If you use ModelarDB in academia, please cite the relevant paper(s) below.
 
 ***Demonstration of ModelarDB: Model-Based Management of High-Frequency Time Series Across Edge, Cloud, and Client***\
 by Søren Kejser Jensen, Christian Schmidt Godiksen, Christian Thomsen, Torben Bach Pedersen\
 in *The Proceedings of the VLDB Endowment, 18(12): 5247-5250, 2025*\
-Links: [PVLDB](https://www.vldb.org/pvldb/vol18/p5247-jensen.pdf)
+Links: [PVLDB](https://www.vldb.org/pvldb/vol18/p5247-jensen.pdf), [GitHub](https://github.com/CGodiksen/modelardb-demo/tree/67f889428118318beb381e7f21a723a4c13c92ca)
 
 ***Scalable Model-Based Management of Massive High Frequency Wind Turbine Data with ModelarDB***\
 by Abduvoris Abduvakhobov, Søren Kejser Jensen, Torben Bach Pedersen, and Christian Thomsen\
@@ -135,5 +107,4 @@ at *GrowAAL, 2019*\
 Links: [Event](https://infinit.dk/big-data/anvend-data-til-at-sikre-din-investering/), [Slides](slides/2019-05-07_GrowAAL.pdf)
 
 ## License
-ModelarDB is licensed under version 2.0 of the Apache License and a copy of the
-license is bundled with the program.
+ModelarDB is licensed under version 2.0 of the Apache License and a copy of the license is bundled with the program.

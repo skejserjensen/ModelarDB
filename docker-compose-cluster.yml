@@ -1,0 +1,95 @@
+# Copyright 2024 The ModelarDB Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: "3.8"
+
+services:
+  # Object store services.
+  minio-server:
+    image: minio/minio
+    container_name: minio-server
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server --console-address ":9001" /data
+
+  create-bucket:
+    image: minio/mc
+    container_name: create-bucket
+    depends_on:
+      - minio-server
+    entrypoint:
+      /bin/sh -c "
+      sleep 2;
+      /usr/bin/mc alias set modelardb-minio http://minio-server:9000 minioadmin minioadmin;
+      /usr/bin/mc mb modelardb-minio/modelardb;
+      exit 0;
+      "
+
+  # ModelarDB services.
+  modelardb-manager:
+    image: modelardb
+    build: .
+    container_name: modelardb-manager
+    command: ["target/debug/modelardbm", "s3://modelardb"]
+    ports:
+      - "9998:9998"
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: eu-central-1
+      AWS_ENDPOINT: http://minio-server:9000
+      AWS_ALLOW_HTTP: true
+    depends_on:
+      create-bucket:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [ "CMD", "echo", "ready" ]
+      interval: 2s
+
+  modelardb-edge:
+    image: modelardb
+    container_name: modelardb-edge
+    command: ["target/debug/modelardbd", "edge", "data/edge", "grpc://modelardb-manager:9998"]
+    ports:
+      - "9999:9999"
+    environment:
+      MODELARDBD_UNCOMPRESSED_DATA_BUFFER_CAPACITY: 640
+      MODELARDBD_COMPRESSED_RESERVED_MEMORY_IN_BYTES: 10000
+      MODELARDBD_TRANSFER_BATCH_SIZE_IN_BYTES: 10000
+      MODELARDBD_IP_ADDRESS: host.docker.internal
+      AWS_ALLOW_HTTP: true
+    depends_on:
+      modelardb-manager:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "echo", "ready" ]
+      interval: 1s
+
+  modelardb-cloud:
+    image: modelardb
+    container_name: modelardb-cloud
+    command: [ "target/debug/modelardbd", "cloud", "data/cloud", "grpc://modelardb-manager:9998"]
+    ports:
+      - "9997:9997"
+    environment:
+      MODELARDBD_PORT: 9997
+      MODELARDBD_IP_ADDRESS: host.docker.internal
+      AWS_ALLOW_HTTP: true
+    depends_on:
+      modelardb-edge:
+        condition: service_healthy
